@@ -4,9 +4,11 @@ import { useState, useEffect } from "react"
 import { type Database, supabase } from "@/lib/supabase"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Trophy, Users, Clock } from "lucide-react"
+import { Trophy, Users, Clock, Timer } from "lucide-react"
 
-type Game = Database["public"]["Tables"]["games"]["Row"]
+type Game = Database["public"]["Tables"]["games"]["Row"] & {
+  round1_timeout_seconds?: number
+}
 type Team = Database["public"]["Tables"]["teams"]["Row"]
 type Participant = Database["public"]["Tables"]["participants"]["Row"]
 
@@ -20,12 +22,32 @@ export function StudentGameView({ game: initialGame, participant, teams: initial
   const [game, setGame] = useState(initialGame)
   const [teams, setTeams] = useState(initialTeams)
   const [myTeam, setMyTeam] = useState<Team | null>(null)
+  const [remainingTime, setRemainingTime] = useState<number | null>(null)
 
   useEffect(() => {
     // Find participant's team
     if (participant?.team_id) {
       const team = teams.find((t) => t.id === participant.team_id)
       setMyTeam(team || null)
+    }
+
+    // Timer logic for round 1
+    if (game.current_round === 1 && game.round1_timeout_seconds) {
+      if (remainingTime === null) {
+        setRemainingTime(game.round1_timeout_seconds);
+      }
+
+      const timer = setInterval(() => {
+        setRemainingTime(prevTime => {
+          if (prevTime === null || prevTime <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return prevTime - 1;
+        });
+      }, 1000);
+
+      return () => clearInterval(timer);
     }
 
     // Subscribe to real-time updates
@@ -77,6 +99,26 @@ export function StudentGameView({ game: initialGame, participant, teams: initial
             <Badge variant="outline">{game.grade_class}</Badge>
           </div>
         </div>
+
+        {/* Timer for Round 1 */}
+        {game.current_round === 1 && remainingTime !== null && (
+          <Card className="text-center">
+            <CardHeader>
+              <CardTitle className="flex items-center justify-center gap-2">
+                <Timer className="h-6 w-6" />
+                <span>Round 1 Timer</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {remainingTime > 0 ? (
+                <p className="text-4xl font-bold">{Math.floor(remainingTime / 60)}:{(remainingTime % 60).toString().padStart(2, '0')}</p>
+              ) : (
+                <p className="text-2xl font-bold text-red-500">Time's up!</p>
+              )}
+              <p className="text-sm text-muted-foreground">The admin can still enter scores.</p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* My Team Status */}
         {myTeam && (

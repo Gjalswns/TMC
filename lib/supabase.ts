@@ -52,6 +52,7 @@ export type Database = {
           current_round: 1 | 2 | 3
           created_at: string
           updated_at: string
+          round1_timeout_seconds?: number
         }
         Insert: {
           id?: string
@@ -64,6 +65,7 @@ export type Database = {
           current_round?: 1 | 2 | 3
           created_at?: string
           updated_at?: string
+          round1_timeout_seconds?: number
         }
         Update: {
           id?: string
@@ -76,6 +78,7 @@ export type Database = {
           current_round?: 1 | 2 | 3
           created_at?: string
           updated_at?: string
+          round1_timeout_seconds?: number
         }
       }
       teams: {

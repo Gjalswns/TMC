@@ -18,8 +18,10 @@ export default async function WaitPage({ params, searchParams }: WaitPageProps) 
     notFound()
   }
 
-  const { data: participant } = searchParams.participant
-    ? await supabase.from("participants").select("*").eq("id", searchParams.participant).single()
+  const participantId = searchParams.participant
+
+  const { data: participant } = participantId
+    ? await supabase.from("participants").select("*").eq("id", participantId).single()
     : { data: null }
 
   return <GameWaitingRoom game={game} participant={participant} />

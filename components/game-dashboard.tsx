@@ -1,18 +1,23 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { type Database, supabase } from "@/lib/supabase"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { QRCodeSVG } from "qrcode.react"
-import { startGame, updateScore, nextRound } from "@/lib/game-actions"
+import { startGame, updateScore, nextRound, updateTimeout } from "@/lib/game-actions"
 import { TeamAssignment } from "./team-assignment"
 import { Scoreboard } from "./scoreboard"
-import { Users, Clock, Hash, ExternalLink, ArrowLeft, Copy, Check } from "lucide-react"
+import { Users, Clock, Hash, ExternalLink, ArrowLeft, Copy, Check, Timer } from "lucide-react"
 import Link from "next/link"
+import { Input } from "./ui/input"
 
-type Game = Database["public"]["Tables"]["games"]["Row"]
+type Game = Database["public"]["Tables"]["games"]["Row"] & {
+  round1_timeout_seconds: number
+  total_rounds: number | null
+}
 type Team = Database["public"]["Tables"]["teams"]["Row"]
 type Participant = Database["public"]["Tables"]["participants"]["Row"]
 
@@ -32,8 +37,10 @@ export function GameDashboard({
   const [participants, setParticipants] = useState(initialParticipants)
   const [isLoading, setIsLoading] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [round1Timeout, setRound1Timeout] = useState(game.round1_timeout_seconds || 60)
+  const router = useRouter()
 
-  const gameUrl = typeof window !== "undefined" ? `${window.location.origin}/join/${game.game_code}` : ""
+  const gameUrl = `/join/${game.game_code}`
 
   const copyGameCode = async () => {
     try {
@@ -89,7 +96,9 @@ export function GameDashboard({
   const handleStartGame = async () => {
     setIsLoading(true)
     const result = await startGame(game.id)
-    if (!result.success) {
+    if (result.success) {
+      setGame((prevGame) => ({ ...prevGame, status: "started", current_round: 1 }))
+    } else {
       alert(result.error)
     }
     setIsLoading(false)
@@ -97,9 +106,22 @@ export function GameDashboard({
 
   const handleNextRound = async () => {
     setIsLoading(true)
-    const result = await nextRound(game.id, game.current_round)
+    const result = await nextRound(game.id)
+    if (result.success) {
+      router.refresh()
+    } else {
+      alert(result.error)
+    }
+    setIsLoading(false)
+  }
+
+  const handleUpdateTimeout = async () => {
+    setIsLoading(true)
+    const result = await updateTimeout(game.id, round1Timeout)
     if (!result.success) {
       alert(result.error)
+    } else {
+      alert("Timeout updated successfully!")
     }
     setIsLoading(false)
   }
@@ -172,6 +194,28 @@ export function GameDashboard({
         </Card>
       </div>
 
+      {game.status === 'waiting' && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Round 1 Timeout</CardTitle>
+            <CardDescription>Set the time limit for the first round in seconds.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex items-center gap-4">
+            <Timer className="h-5 w-5 text-muted-foreground" />
+            <Input 
+              type="number" 
+              value={round1Timeout} 
+              onChange={(e) => setRound1Timeout(parseInt(e.target.value, 10))}
+              className="max-w-xs"
+              disabled={game.status !== 'waiting'}
+            />
+            <Button onClick={handleUpdateTimeout} disabled={isLoading || game.status !== 'waiting'}>
+              {isLoading ? 'Saving...' : 'Save'}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {game.status === "waiting" && (
         <div className="grid gap-6 lg:grid-cols-2">
           {/* QR Code and Join Info */}
@@ -229,7 +273,7 @@ export function GameDashboard({
             onScoreUpdate={(teamId, score) => updateScore(teamId, score)}
           />
 
-          {game.current_round < 3 && (
+          {game.current_round < (game.total_rounds || 3) && (
             <div className="flex justify-center">
               <Button onClick={handleNextRound} disabled={isLoading} size="lg">
                 {isLoading ? "Loading..." : `Next Round (${game.current_round + 1})`}

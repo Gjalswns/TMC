@@ -43,6 +43,11 @@ ALTER TABLE teams ENABLE ROW LEVEL SECURITY;
 ALTER TABLE participants ENABLE ROW LEVEL SECURITY;
 
 -- Create policies (allowing all operations for now - adjust based on your auth requirements)
+DROP POLICY IF EXISTS "Allow all operations on games" ON games;
 CREATE POLICY "Allow all operations on games" ON games FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Allow all operations on teams" ON teams;
 CREATE POLICY "Allow all operations on teams" ON teams FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "Allow all operations on participants" ON participants;
 CREATE POLICY "Allow all operations on participants" ON participants FOR ALL USING (true);

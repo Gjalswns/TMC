@@ -1,0 +1,1 @@
+ALTER TABLE games ADD COLUMN IF NOT EXISTS round1_timeout_seconds INTEGER DEFAULT 60; 

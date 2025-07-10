@@ -75,15 +75,13 @@ export function GameWaitingRoom({ game: initialGame, participant }: GameWaitingR
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "participants", filter: `game_id=eq.${game.id}` },
-        () => {
-          getParticipantCount()
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "participants", filter: `id=eq.${participant?.id}` },
-        () => {
-          getTeamInfo()
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "DELETE") {
+            getParticipantCount()
+          }
+          if (payload.eventType === "UPDATE" && payload.new.id === participant?.id) {
+            getTeamInfo()
+          }
         },
       )
       .subscribe()

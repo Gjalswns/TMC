@@ -46,7 +46,7 @@ export async function createGame(formData: FormData) {
     return { success: true, gameId: game.id, gameCode }
   } catch (error) {
     console.error("Error creating game:", error)
-    return { success: false, error: "Failed to create game" }
+    return { success: false, error: (error as Error).message || "Failed to create game" }
   }
 }
 
@@ -83,7 +83,7 @@ export async function joinGame(gameCode: string, nickname: string, studentId?: s
     return { success: true, gameId: game.id, participantId: participant.id }
   } catch (error) {
     console.error("Error joining game:", error)
-    return { success: false, error: "Failed to join game" }
+    return { success: false, error: (error as Error).message || "Failed to join game" }
   }
 }
 
@@ -98,7 +98,7 @@ export async function assignTeams(gameId: string, assignments: { participantId: 
     return { success: true }
   } catch (error) {
     console.error("Error assigning teams:", error)
-    return { success: false, error: "Failed to assign teams" }
+    return { success: false, error: (error as Error).message || "Failed to assign teams" }
   }
 }
 
@@ -113,7 +113,7 @@ export async function startGame(gameId: string) {
     return { success: true }
   } catch (error) {
     console.error("Error starting game:", error)
-    return { success: false, error: "Failed to start game" }
+    return { success: false, error: (error as Error).message || "Failed to start game" }
   }
 }
 
@@ -126,21 +126,57 @@ export async function updateScore(teamId: string, newScore: number) {
     return { success: true }
   } catch (error) {
     console.error("Error updating score:", error)
-    return { success: false, error: "Failed to update score" }
+    return { success: false, error: (error as Error).message || "Failed to update score" }
   }
 }
 
-export async function nextRound(gameId: string, currentRound: number) {
+export async function nextRound(gameId: string) {
   try {
-    const nextRoundNumber = Math.min(currentRound + 1, 3)
+    // Get the current game state
+    const { data: game, error: fetchError } = await supabase
+      .from("games")
+      .select("current_round, total_rounds")
+      .eq("id", gameId)
+      .single()
 
-    const { error } = await supabase.from("games").update({ current_round: nextRoundNumber }).eq("id", gameId)
+    if (fetchError) throw fetchError
+    if (!game) throw new Error("Game not found")
 
-    if (error) throw error
+    const { current_round, total_rounds } = game
+    const nextRoundNumber = current_round + 1
 
+    if (nextRoundNumber > total_rounds) {
+      return { success: false, error: "Game has already reached the final round" }
+    }
+
+    const { error: updateError } = await supabase
+      .from("games")
+      .update({ current_round: nextRoundNumber })
+      .eq("id", gameId)
+
+    if (updateError) throw updateError
+
+    revalidatePath(`/admin/game/${gameId}`)
     return { success: true, round: nextRoundNumber }
   } catch (error) {
     console.error("Error advancing round:", error)
-    return { success: false, error: "Failed to advance round" }
+    return { success: false, error: (error as Error).message || "Failed to advance round" }
+  }
+}
+
+export async function updateTimeout(gameId: string, timeout: number) {
+  try {
+    const { error } = await supabase
+      .from("games")
+      .update({ round1_timeout_seconds: timeout })
+      .eq("id", gameId)
+
+    if (error) throw error
+
+    revalidatePath(`/admin/game/${gameId}`)
+    return { success: true }
+  } catch (error) {
+    console.error("Error updating timeout:", error)
+    return { success: false, error: (error as Error).message || "Failed to update timeout" }
   }
 }
