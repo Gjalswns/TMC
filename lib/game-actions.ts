@@ -6,24 +6,17 @@ import { revalidatePath } from "next/cache";
 // Broadcast game events to all connected clients
 async function broadcastGameEvent(gameId: string, eventType: string, data: any) {
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/broadcast-game-event`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
-      },
-      body: JSON.stringify({
-        gameId,
-        eventType,
-        data
-      })
+    // Use Supabase realtime broadcast
+    const channel = supabase.channel(`game-${gameId}`);
+    await channel.send({
+      type: 'broadcast',
+      event: eventType,
+      payload: data
     });
-
-    if (!response.ok) {
-      console.error('Failed to broadcast event:', response.statusText);
-    }
+    console.log(`✅ Broadcasted ${eventType} event for game ${gameId}`);
   } catch (error) {
-    console.error('Error broadcasting game event:', error);
+    console.error('❌ Error broadcasting game event:', error);
+    // Don't throw - broadcasting is a nice-to-have, not critical
   }
 }
 import { createYearGameSession } from "./year-game-actions";
@@ -102,7 +95,10 @@ export async function createGame(
       .select()
       .single();
 
-    if (gameError) throw gameError;
+    if (gameError) {
+      console.error("❌ Error creating game:", gameError);
+      throw gameError;
+    }
 
     // Create teams for the game
     const teams = Array.from({ length: teamCount }, (_, i) => ({
@@ -113,16 +109,20 @@ export async function createGame(
 
     const { error: teamsError } = await supabase.from("teams").insert(teams);
 
-    if (teamsError) throw teamsError;
+    if (teamsError) {
+      console.error("❌ Error creating teams:", teamsError);
+      throw teamsError;
+    }
 
     revalidatePath("/admin");
     
     // Broadcast game creation event
     await broadcastGameEvent(game.id, 'game-created', game);
     
+    console.log(`✅ Game created successfully: ${game.id} (code: ${gameCode})`);
     return { success: true, gameId: game.id, gameCode };
   } catch (error) {
-    console.error("Error creating game:", error);
+    console.error("❌ Error creating game:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to create game",
@@ -159,6 +159,7 @@ export async function joinGame(
       .single();
 
     if (gameError || !game) {
+      console.error("❌ Game not found:", gameCode, gameError);
       return { success: false, error: "Game not found" };
     }
 
@@ -171,11 +172,12 @@ export async function joinGame(
       });
 
     if (validationError) {
-      console.error("Validation error:", validationError);
+      console.error("❌ Validation error:", validationError);
       return { success: false, error: "Failed to validate join request" };
     }
 
     if (!validationResult.valid) {
+      console.warn("⚠️ Join validation failed:", validationResult.error);
       return { success: false, error: validationResult.error };
     }
 
@@ -209,6 +211,7 @@ export async function joinGame(
       participantCount: validationResult.participant_count + 1
     });
 
+    console.log(`✅ Participant joined: ${nickname} (${participant.id}) to game ${game.id}`);
     return { 
       success: true, 
       gameId: game.id, 
@@ -216,7 +219,7 @@ export async function joinGame(
       participantCount: validationResult.participant_count + 1
     };
   } catch (error) {
-    console.error("Error joining game:", error);
+    console.error("❌ Error joining game:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to join game",
@@ -250,7 +253,7 @@ export async function assignTeams(
 
 export async function startGame(gameId: string) {
   try {
-    console.log("startGame called with gameId:", gameId);
+    console.log("🎮 Starting game:", gameId);
 
     // Update game status to started and set current round to 1
     const { error: gameUpdateError } = await supabase
@@ -262,16 +265,21 @@ export async function startGame(gameId: string) {
       })
       .eq("id", gameId);
 
-    if (gameUpdateError) throw gameUpdateError;
+    if (gameUpdateError) {
+      console.error("❌ Error updating game status:", gameUpdateError);
+      throw gameUpdateError;
+    }
 
     // Create Year Game session automatically
     const yearGameResult = await createYearGameSession(gameId, 1);
     if (!yearGameResult.success) {
       console.error(
-        "Failed to create Year Game session:",
+        "❌ Failed to create Year Game session:",
         yearGameResult.error
       );
       // Don't fail the entire start process, just log the error
+    } else {
+      console.log("✅ Year Game session created successfully");
     }
 
     // Ensure all teams have initial scores
@@ -288,7 +296,9 @@ export async function startGame(gameId: string) {
         .eq("game_id", gameId);
 
       if (scoreResetError) {
-        console.error("Failed to reset team scores:", scoreResetError);
+        console.error("❌ Failed to reset team scores:", scoreResetError);
+      } else {
+        console.log("✅ Team scores reset successfully");
       }
     }
 
@@ -302,9 +312,10 @@ export async function startGame(gameId: string) {
       startedAt: new Date().toISOString()
     });
     
+    console.log(`✅ Game started successfully: ${gameId}`);
     return { success: true };
   } catch (error) {
-    console.error("Error starting game:", error);
+    console.error("❌ Error starting game:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to start game",
