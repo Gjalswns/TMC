@@ -1,15 +1,11 @@
-import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+// This file is for backward compatibility
+// All new code should import from @/lib/supabase instead
+import { supabase } from "@/lib/supabase";
+import type { Database } from "@/lib/supabase";
 
 export function createClient() {
-  return createSupabaseClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      realtime: {
-        params: {
-          eventsPerSecond: 10,
-        },
-      },
-    }
-  );
+  return supabase;
 }
+
+// Re-export for convenience
+export { supabase, Database };

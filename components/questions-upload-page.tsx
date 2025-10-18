@@ -19,10 +19,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/use-toast";
 import {
   createScoreStealQuestion,
-  createRelayQuizQuestion,
   getScoreStealQuestions,
+} from "@/lib/score-steal-actions";
+import {
+  createRelayQuizQuestion,
   getRelayQuizQuestions,
-} from "@/lib/game-actions";
+} from "@/lib/relay-quiz-actions";
 import { supabase } from "@/lib/supabase";
 import {
   Plus,

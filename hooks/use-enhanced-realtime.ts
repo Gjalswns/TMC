@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 interface EnhancedRealtimeOptions {
@@ -41,39 +41,36 @@ export function useEnhancedRealtime(options: EnhancedRealtimeOptions) {
     
     fallbackIntervalRef.current = setInterval(async () => {
       try {
-        const response = await fetch('/api/supabase/functions/sync-game-state', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${supabase.supabaseKey}`
-          },
-          body: JSON.stringify({
-            gameId: options.gameId,
-            includeParticipants: true,
-            includeTeams: true,
-            includeSessions: true
-          })
-        })
+        // Fetch game data directly from Supabase instead of edge function
+        const { data: game, error: gameError } = await supabase
+          .from('games')
+          .select('*')
+          .eq('id', options.gameId)
+          .single();
 
-        if (response.ok) {
-          const { gameState } = await response.json()
-          
-          // Trigger callbacks with fresh data
-          if (gameState.game) options.onGameUpdate?.(gameState.game)
-          if (gameState.participants) {
-            gameState.participants.forEach((p: any) => options.onParticipantUpdate?.(p))
-          }
-          if (gameState.teams) {
-            gameState.teams.forEach((t: any) => options.onTeamUpdate?.(t))
-          }
-          if (gameState.sessions) {
-            Object.values(gameState.sessions).forEach((s: any) => {
-              if (s) options.onSessionUpdate?.(s)
-            })
-          }
+        if (!gameError && game) {
+          options.onGameUpdate?.(game);
+        }
+
+        const { data: participants, error: participantsError } = await supabase
+          .from('participants')
+          .select('*')
+          .eq('game_id', options.gameId);
+
+        if (!participantsError && participants) {
+          participants.forEach((p) => options.onParticipantUpdate?.(p));
+        }
+
+        const { data: teams, error: teamsError } = await supabase
+          .from('teams')
+          .select('*')
+          .eq('game_id', options.gameId);
+
+        if (!teamsError && teams) {
+          teams.forEach((t) => options.onTeamUpdate?.(t));
         }
       } catch (error) {
-        console.error('Fallback polling error:', error)
+        console.error('❌ Fallback polling error:', error)
       }
     }, options.fallbackInterval || 5000)
   }, [options])
@@ -109,6 +106,12 @@ export function useEnhancedRealtime(options: EnhancedRealtimeOptions) {
 
   // Setup websocket connection
   const setupWebSocket = useCallback(() => {
+    if (!isSupabaseConfigured()) {
+      console.warn("⚠️ Supabase is not configured. Starting fallback polling...");
+      startFallbackPolling();
+      return;
+    }
+
     // Clean up existing connection
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current)
@@ -217,30 +220,27 @@ export function useEnhancedRealtime(options: EnhancedRealtimeOptions) {
 
   // Broadcast event function
   const broadcastEvent = useCallback(async (eventType: string, data: any, targetUsers?: string[]) => {
+    if (!isSupabaseConfigured()) {
+      console.warn("⚠️ Supabase is not configured. Cannot broadcast events.");
+      return { success: false, error: "Supabase not configured" };
+    }
+
     try {
-      const response = await fetch('/api/supabase/functions/broadcast-game-event', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${supabase.supabaseKey}`
-        },
-        body: JSON.stringify({
-          gameId: options.gameId,
-          eventType,
-          data,
-          targetUsers
-        })
-      })
-
-      if (!response.ok) {
-        throw new Error(`Broadcast failed: ${response.statusText}`)
+      // Use Supabase Realtime broadcast instead of edge function
+      if (channelRef.current) {
+        await channelRef.current.send({
+          type: 'broadcast',
+          event: eventType,
+          payload: data
+        });
+        return { success: true };
+      } else {
+        throw new Error("No active channel to broadcast to");
       }
-
-      return await response.json()
     } catch (error) {
-      console.error('Failed to broadcast event:', error)
+      console.error('❌ Failed to broadcast event:', error)
       options.onError?.(error as Error)
-      throw error
+      return { success: false, error: (error as Error).message };
     }
   }, [options])
 

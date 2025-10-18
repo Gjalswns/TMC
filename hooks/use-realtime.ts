@@ -1,5 +1,5 @@
-import { useEffect, useRef, useCallback } from "react";
-import { supabase } from "@/lib/supabase";
+import { useEffect, useRef, useCallback, useState } from "react";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import {
   RealtimeChannel,
   RealtimePostgresChangesPayload,
@@ -17,59 +17,91 @@ interface RealtimeSubscriptionOptions {
 
 export function useRealtime(options: RealtimeSubscriptionOptions) {
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const reconnectAttempts = useRef(0);
+  const maxReconnectAttempts = 3;
 
   useEffect(() => {
+    if (!isSupabaseConfigured()) {
+      console.warn("⚠️ Supabase is not configured. Realtime subscriptions are disabled.");
+      return;
+    }
+
     const channelName = `realtime-${options.table}-${Date.now()}`;
 
-    channelRef.current = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes" as any,
-        {
-          event: options.event || "*",
-          schema: "public",
-          table: options.table,
-          filter: options.filter,
-        },
-        (payload: RealtimePostgresChangesPayload<any>) => {
-          console.log(`Realtime event on ${options.table}:`, payload);
+    const setupChannel = () => {
+      // Clean up existing channel
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
 
-          switch (payload.eventType) {
-            case "INSERT":
-              options.onInsert?.(payload);
-              break;
-            case "UPDATE":
-              options.onUpdate?.(payload);
-              break;
-            case "DELETE":
-              options.onDelete?.(payload);
-              break;
-            default:
-              options.onAny?.(payload);
+      channelRef.current = supabase
+        .channel(channelName)
+        .on(
+          "postgres_changes" as any,
+          {
+            event: options.event || "*",
+            schema: "public",
+            table: options.table,
+            filter: options.filter,
+          },
+          (payload: RealtimePostgresChangesPayload<any>) => {
+            console.log(`📡 Realtime event on ${options.table}:`, payload);
+
+            switch (payload.eventType) {
+              case "INSERT":
+                options.onInsert?.(payload);
+                break;
+              case "UPDATE":
+                options.onUpdate?.(payload);
+                break;
+              case "DELETE":
+                options.onDelete?.(payload);
+                break;
+              default:
+                options.onAny?.(payload);
+            }
           }
-        }
-      )
-      .subscribe((status) => {
-        console.log(
-          `Realtime subscription status for ${options.table}:`,
-          status
-        );
+        )
+        .subscribe((status) => {
+          console.log(
+            `📡 Realtime subscription status for ${options.table}:`,
+            status
+          );
 
-        if (status === "SUBSCRIBED") {
-          console.log(`✅ Successfully subscribed to ${options.table} table`);
-        } else if (status === "CHANNEL_ERROR") {
-          console.error(`❌ Failed to subscribe to ${options.table} table`);
-        } else if (status === "TIMED_OUT") {
-          console.warn(`⏰ Subscription to ${options.table} table timed out`);
-        } else if (status === "CLOSED") {
-          console.log(`🔒 Subscription to ${options.table} table closed`);
-        }
-      });
+          if (status === "SUBSCRIBED") {
+            console.log(`✅ Successfully subscribed to ${options.table} table`);
+            setIsConnected(true);
+            reconnectAttempts.current = 0;
+          } else if (status === "CHANNEL_ERROR") {
+            console.error(`❌ Failed to subscribe to ${options.table} table`);
+            setIsConnected(false);
+            
+            // Attempt to reconnect
+            if (reconnectAttempts.current < maxReconnectAttempts) {
+              reconnectAttempts.current++;
+              console.log(`🔄 Reconnecting... (attempt ${reconnectAttempts.current}/${maxReconnectAttempts})`);
+              setTimeout(() => setupChannel(), 2000 * reconnectAttempts.current);
+            }
+          } else if (status === "TIMED_OUT") {
+            console.warn(`⏰ Subscription to ${options.table} table timed out`);
+            setIsConnected(false);
+          } else if (status === "CLOSED") {
+            console.log(`🔒 Subscription to ${options.table} table closed`);
+            setIsConnected(false);
+          }
+        });
+    };
+
+    setupChannel();
 
     return () => {
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
       }
+      setIsConnected(false);
     };
   }, [
     options.table,
@@ -81,7 +113,7 @@ export function useRealtime(options: RealtimeSubscriptionOptions) {
     options.onAny,
   ]);
 
-  return channelRef.current;
+  return { channel: channelRef.current, isConnected };
 }
 
 // 특화된 훅들
