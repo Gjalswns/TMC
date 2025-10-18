@@ -143,7 +143,7 @@ export async function endYearGameSession(sessionId: string) {
 }
 
 /**
- * Submit a Year Game attempt
+ * Submit a Year Game attempt (with race condition protection)
  */
 export async function submitYearGameAttempt(
   sessionId: string,
@@ -153,7 +153,9 @@ export async function submitYearGameAttempt(
   targetNumber: number
 ) {
   try {
-    // Get session data
+    console.log(`🎯 Submitting Year Game attempt: team=${teamId}, target=${targetNumber}`);
+    
+    // Get session data to validate
     const { data: session, error: sessionError } = await supabase
       .from("year_game_sessions")
       .select("target_numbers, status")
@@ -161,14 +163,16 @@ export async function submitYearGameAttempt(
       .single();
 
     if (sessionError || !session) {
+      console.error("❌ Session not found:", sessionError);
       return { success: false, error: "Session not found" };
     }
 
     if (session.status !== "active") {
+      console.warn("⚠️ Session is not active:", session.status);
       return { success: false, error: "Session is not active" };
     }
 
-    // Get already found numbers for this team
+    // Validate the attempt on client side
     const { data: teamResult } = await supabase
       .from("year_game_results")
       .select("numbers_found")
@@ -177,8 +181,6 @@ export async function submitYearGameAttempt(
       .single();
 
     const alreadyFound = teamResult?.numbers_found || [];
-
-    // Validate the attempt
     const attempt = validateYearGameAttempt(
       expression,
       session.target_numbers,
@@ -186,61 +188,54 @@ export async function submitYearGameAttempt(
       alreadyFound
     );
 
-    // Record the attempt
-    const { error: attemptError } = await supabase
-      .from("year_game_attempts")
-      .insert({
-        session_id: sessionId,
-        team_id: teamId,
-        participant_id: participantId,
-        expression: expression,
-        target_number: targetNumber,
-        is_valid: attempt.isValid,
-        is_correct: attempt.isCorrect,
-        is_duplicate: attempt.isDuplicate,
-      });
-
-    if (attemptError) throw attemptError;
-
-    // If the attempt is correct and not duplicate, update team results
-    if (attempt.isCorrect && !attempt.isDuplicate) {
-      const newNumbersFound = [...alreadyFound, targetNumber].sort(
-        (a, b) => a - b
-      );
-      const newScore = calculateScore(newNumbersFound);
-
-      const { error: updateError } = await supabase
-        .from("year_game_results")
-        .update({
-          numbers_found: newNumbersFound,
-          total_found: newNumbersFound.length,
-          score: newScore,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("session_id", sessionId)
-        .eq("team_id", teamId);
-
-      if (updateError) throw updateError;
-
-      // Update team score in teams table using RPC function for consistency
-      const { error: teamScoreError } = await supabase.rpc('update_team_score', {
-        team_id: teamId,
-        new_score: newScore
-      });
-
-      if (teamScoreError) {
-        console.error("Failed to update team score:", teamScoreError);
-      }
+    if (!attempt.isValid) {
+      console.warn("⚠️ Invalid attempt:", attempt.error);
+      return {
+        success: false,
+        error: attempt.error || "Invalid expression",
+      };
     }
 
+    // Use atomic database function to prevent race conditions
+    const { data: result, error: rpcError } = await supabase.rpc(
+      "submit_year_game_attempt_safe",
+      {
+        p_session_id: sessionId,
+        p_team_id: teamId,
+        p_participant_id: participantId,
+        p_expression: expression,
+        p_target_number: targetNumber,
+        p_is_valid: attempt.isValid,
+        p_is_correct: attempt.isCorrect,
+      }
+    );
+
+    if (rpcError) {
+      console.error("❌ RPC error:", rpcError);
+      throw rpcError;
+    }
+
+    if (!result.success) {
+      console.error("❌ Attempt failed:", result.error);
+      return { success: false, error: result.error };
+    }
+
+    console.log(`✅ Attempt submitted successfully: duplicate=${result.is_duplicate}`);
+    
     revalidatePath("/admin");
     return {
       success: true,
-      attempt,
-      isNewNumber: attempt.isCorrect && !attempt.isDuplicate,
+      attempt: {
+        isValid: attempt.isValid,
+        isCorrect: attempt.isCorrect,
+        isDuplicate: result.is_duplicate,
+        error: result.is_duplicate ? "Number already found" : null,
+      },
+      isNewNumber: attempt.isCorrect && !result.is_duplicate,
+      newScore: result.new_score,
     };
   } catch (error) {
-    console.error("Error submitting Year Game attempt:", error);
+    console.error("❌ Error submitting Year Game attempt:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to submit attempt",

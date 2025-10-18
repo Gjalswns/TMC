@@ -175,7 +175,7 @@ export async function createRelayQuizQuestion(
 }
 
 /**
- * Submit a Relay Quiz answer
+ * Submit a Relay Quiz answer (with race condition protection)
  */
 export async function submitRelayQuizAnswer(
   sessionId: string,
@@ -186,126 +186,65 @@ export async function submitRelayQuizAnswer(
   previousAnswer?: string
 ) {
   try {
-    // Get session data
-    const { data: session, error: sessionError } = await supabase
-      .from("relay_quiz_sessions")
-      .select("status, game_id, round_number")
-      .eq("id", sessionId)
-      .single();
-
-    if (sessionError || !session) {
-      return { success: false, error: "Session not found" };
-    }
-
-    if (session.status !== "active") {
-      return { success: false, error: "Session is not active" };
-    }
-
-    // Get question data
+    console.log(`📝 Submitting Relay Quiz answer: team=${teamId}, question=${questionId}`);
+    
+    // Get question data for validation
     const { data: question, error: questionError } = await supabase
       .from("relay_quiz_questions")
-      .select("correct_answer, points, question_order")
+      .select("correct_answer, points")
       .eq("id", questionId)
       .single();
 
     if (questionError || !question) {
+      console.error("❌ Question not found:", questionError);
       return { success: false, error: "Question not found" };
     }
 
-    // Get team progress
-    const { data: teamProgress, error: progressError } = await supabase
+    // Use atomic database function to prevent race conditions
+    const { data: result, error: rpcError } = await supabase.rpc(
+      "submit_relay_quiz_answer_safe",
+      {
+        p_session_id: sessionId,
+        p_team_id: teamId,
+        p_participant_id: participantId,
+        p_question_id: questionId,
+        p_answer: answer,
+        p_correct_answer: question.correct_answer,
+        p_points: question.points,
+        p_previous_answer: previousAnswer || null,
+      }
+    );
+
+    if (rpcError) {
+      console.error("❌ RPC error:", rpcError);
+      throw rpcError;
+    }
+
+    if (!result.success) {
+      console.warn("⚠️ Answer submission failed:", result.error);
+      return { success: false, error: result.error };
+    }
+
+    console.log(`✅ Answer submitted: correct=${result.is_correct}, points=${result.points_earned}`);
+
+    // Get team progress for isLastQuestion check
+    const { data: teamProgress } = await supabase
       .from("relay_quiz_team_progress")
-      .select("*")
+      .select("total_questions")
       .eq("session_id", sessionId)
       .eq("team_id", teamId)
       .single();
-
-    if (progressError || !teamProgress) {
-      return { success: false, error: "Team progress not found" };
-    }
-
-    // Check if this is the correct question for the team
-    if (teamProgress.current_question_order !== question.question_order) {
-      return { success: false, error: "Wrong question order" };
-    }
-
-    // Check if this participant already answered this question
-    const { data: existingAttempt } = await supabase
-      .from("relay_quiz_attempts")
-      .select("id")
-      .eq("session_id", sessionId)
-      .eq("team_id", teamId)
-      .eq("participant_id", participantId)
-      .eq("question_id", questionId)
-      .single();
-
-    if (existingAttempt) {
-      return {
-        success: false,
-        error: "Participant already answered this question",
-      };
-    }
-
-    const isCorrect =
-      answer.toLowerCase().trim() ===
-      question.correct_answer.toLowerCase().trim();
-    const pointsEarned = isCorrect ? question.points : 0;
-
-    // Record the attempt
-    const { error: attemptError } = await supabase
-      .from("relay_quiz_attempts")
-      .insert({
-        session_id: sessionId,
-        team_id: teamId,
-        participant_id: participantId,
-        question_id: questionId,
-        answer,
-        is_correct: isCorrect,
-        previous_answer: previousAnswer,
-        points_earned: pointsEarned,
-      });
-
-    if (attemptError) throw attemptError;
-
-    // Update team progress
-    const newQuestionsCompleted = teamProgress.questions_completed + 1;
-    const newTotalScore = teamProgress.total_score + pointsEarned;
-    const newCurrentQuestionOrder = teamProgress.current_question_order + 1;
-
-    const { error: updateProgressError } = await supabase
-      .from("relay_quiz_team_progress")
-      .update({
-        questions_completed: newQuestionsCompleted,
-        total_score: newTotalScore,
-        current_question_order: newCurrentQuestionOrder,
-        last_participant_id: participantId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("session_id", sessionId)
-      .eq("team_id", teamId);
-
-    if (updateProgressError) throw updateProgressError;
-
-    // Update team score in teams table
-    if (isCorrect) {
-      const { error: teamScoreError } = await supabase.rpc('increment_team_score', {
-        team_id: teamId,
-        points: pointsEarned
-      });
-
-      if (teamScoreError) throw teamScoreError;
-    }
 
     revalidatePath("/admin");
     return {
       success: true,
-      isCorrect,
-      pointsEarned,
-      nextQuestionOrder: newCurrentQuestionOrder,
-      isLastQuestion: newCurrentQuestionOrder > teamProgress.total_questions,
+      isCorrect: result.is_correct,
+      pointsEarned: result.points_earned,
+      nextQuestionOrder: result.next_question_order,
+      isLastQuestion: result.next_question_order > (teamProgress?.total_questions || 0),
     };
   } catch (error) {
-    console.error("Error submitting Relay Quiz answer:", error);
+    console.error("❌ Error submitting Relay Quiz answer:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to submit answer",

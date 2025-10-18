@@ -142,7 +142,7 @@ export async function createScoreStealQuestion(
 }
 
 /**
- * Submit a Score Steal attempt
+ * Submit a Score Steal attempt (with race condition protection)
  */
 export async function submitScoreStealAttempt(
   gameId: string,
@@ -153,103 +153,60 @@ export async function submitScoreStealAttempt(
   answer: string
 ) {
   try {
+    console.log(`🎯 Score Steal attempt: team=${teamId} -> target=${targetTeamId}`);
+    
     // Get question data
     const { data: question, error: questionError } = await supabase
       .from("score_steal_questions")
-      .select("correct_answer, difficulty, points")
+      .select("correct_answer, points")
       .eq("id", questionId)
       .single();
 
     if (questionError || !question) {
+      console.error("❌ Question not found:", questionError);
       return { success: false, error: "Question not found" };
     }
 
-    // Get session status
-    const { data: session, error: sessionError } = await supabase
-      .from("score_steal_sessions")
-      .select("status")
-      .eq("game_id", gameId)
-      .eq("round_number", roundNumber)
-      .single();
+    // Use atomic database function to handle score transfer
+    // This prevents deadlocks and ensures consistent score updates
+    const { data: result, error: rpcError } = await supabase.rpc(
+      "submit_score_steal_attempt_safe",
+      {
+        p_game_id: gameId,
+        p_round_number: roundNumber,
+        p_team_id: teamId,
+        p_question_id: questionId,
+        p_target_team_id: targetTeamId,
+        p_answer: answer,
+        p_correct_answer: question.correct_answer,
+        p_points: question.points,
+      }
+    );
 
-    if (sessionError || !session) {
-      return { success: false, error: "Session not found" };
+    if (rpcError) {
+      console.error("❌ RPC error:", rpcError);
+      throw rpcError;
     }
 
-    if (session.status !== "active") {
-      return { success: false, error: "Session is not active" };
+    if (!result.success) {
+      console.warn("⚠️ Score Steal attempt failed:", result.error);
+      return { success: false, error: result.error };
     }
 
-    const isCorrect =
-      answer.toLowerCase().trim() ===
-      question.correct_answer.toLowerCase().trim();
-
-    let pointsGained = 0;
-    let pointsLost = 0;
-
-    if (isCorrect) {
-      // Attacking team gains points, target team loses points
-      pointsGained = question.points;
-      pointsLost = question.points;
-    } else {
-      // Attacking team loses points (half of question points)
-      pointsGained = -Math.floor(question.points / 2);
-      pointsLost = 0;
-    }
-
-    // Record the attempt
-    const { error: attemptError } = await supabase
-      .from("score_steal_attempts")
-      .insert({
-        game_id: gameId,
-        round_number: roundNumber,
-        team_id: teamId,
-        question_id: questionId,
-        target_team_id: targetTeamId,
-        answer,
-        is_correct: isCorrect,
-        points_gained: pointsGained,
-        points_lost: pointsLost,
-      });
-
-    if (attemptError) throw attemptError;
-
-    // Update team scores
-    if (isCorrect) {
-      // Add points to attacking team
-      const { error: attackingTeamError } = await supabase.rpc('increment_team_score', {
-        team_id: teamId,
-        points: pointsGained
-      });
-
-      if (attackingTeamError) throw attackingTeamError;
-
-      // Subtract points from target team
-      const { error: targetTeamError } = await supabase.rpc('decrement_team_score', {
-        team_id: targetTeamId,
-        points: pointsLost
-      });
-
-      if (targetTeamError) throw targetTeamError;
-    } else {
-      // Subtract points from attacking team (penalty for wrong answer)
-      const { error: attackingTeamError } = await supabase.rpc('decrement_team_score', {
-        team_id: teamId,
-        points: Math.abs(pointsGained)
-      });
-
-      if (attackingTeamError) throw attackingTeamError;
-    }
+    console.log(`✅ Score Steal completed: correct=${result.is_correct}, ` +
+      `attacking_score=${result.attacking_team_score}, target_score=${result.target_team_score}`);
 
     revalidatePath("/admin");
     return {
       success: true,
-      isCorrect,
-      pointsGained,
-      pointsLost,
+      isCorrect: result.is_correct,
+      pointsGained: result.points_gained,
+      pointsLost: result.points_lost,
+      attackingTeamScore: result.attacking_team_score,
+      targetTeamScore: result.target_team_score,
     };
   } catch (error) {
-    console.error("Error submitting Score Steal attempt:", error);
+    console.error("❌ Error submitting Score Steal attempt:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to submit attempt",
