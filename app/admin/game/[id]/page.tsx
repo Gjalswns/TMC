@@ -1,31 +1,58 @@
+'use client'
+
+import { useParams } from 'next/navigation'
 import { supabase } from "@/lib/supabase"
 import { GameDashboard } from "@/components/game-dashboard"
 import { notFound } from "next/navigation"
+import { useEffect, useState } from "react"
 
-interface GamePageProps {
-  params: {
-    id: string
-  }
-}
+export default function GamePage() {
+  const params = useParams()
+  const id = params?.id as string
 
-export default async function GamePage({ params }: GamePageProps) {
-  if (!params.id) {
-    notFound(); // 또는 적절한 오류 처리
-  }
+  const [game, setGame] = useState<any>(null)
+  const [teams, setTeams] = useState<any[]>([])
+  const [participants, setParticipants] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const { data: game } = await supabase.from("games").select("*, teams(*), participants(*)").eq("id", params.id).single()
+  useEffect(() => {
+    if (!id) return
 
-  if (!game) {
-    notFound()
-  }
+    const fetchGameData = async () => {
+      const { data: gameData } = await supabase
+        .from("games")
+        .select("*, teams(*), participants(*)")
+        .eq("id", id)
+        .single()
 
-  const { data: teams } = await supabase.from("teams").select("*").eq("game_id", params.id).order("team_number")
+      if (!gameData) {
+        notFound()
+        return
+      }
 
-  const { data: participants } = await supabase
-    .from("participants")
-    .select("*")
-    .eq("game_id", params.id)
-    .order("joined_at")
+      const { data: teamsData } = await supabase
+        .from("teams")
+        .select("*")
+        .eq("game_id", id)
+        .order("team_number")
 
-  return <GameDashboard game={game} teams={teams || []} participants={participants || []} />
+      const { data: participantsData } = await supabase
+        .from("participants")
+        .select("*")
+        .eq("game_id", id)
+        .order("joined_at")
+
+      setGame(gameData)
+      setTeams(teamsData || [])
+      setParticipants(participantsData || [])
+      setLoading(false)
+    }
+
+    fetchGameData()
+  }, [id])
+
+  if (loading) return <div>Loading...</div>
+  if (!game) return <div>Game not found.</div>
+
+  return <GameDashboard game={game} teams={teams} participants={participants} />
 }

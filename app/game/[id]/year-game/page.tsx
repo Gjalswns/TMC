@@ -1,8 +1,8 @@
 import { supabase } from "@/lib/supabase";
-import { StudentGameView } from "@/components/student-game-view";
-import { notFound, redirect } from "next/navigation";
+import { YearGamePlayView } from "@/components/year-game-play-view";
+import { notFound } from "next/navigation";
 
-interface PlayPageProps {
+interface YearGamePageProps {
   params: {
     id: string;
   };
@@ -11,10 +11,10 @@ interface PlayPageProps {
   };
 }
 
-export default async function PlayPage({
+export default async function YearGamePage({
   params,
   searchParams,
-}: PlayPageProps) {
+}: YearGamePageProps) {
   const { data: game } = await supabase
     .from("games")
     .select("*")
@@ -26,19 +26,11 @@ export default async function PlayPage({
   }
 
   const resolvedSearchParams = await searchParams;
-
-  // If participant is provided, redirect to game selection
-  if (resolvedSearchParams.participant) {
-    redirect(
-      `/game/${params.id}/select?participant=${resolvedSearchParams.participant}`
-    );
-  }
-
   const teamsPromise = supabase
     .from("teams")
     .select("*")
     .eq("game_id", params.id)
-    .order("score", { ascending: false });
+    .order("team_number");
 
   const participantPromise = resolvedSearchParams.participant
     ? supabase
@@ -53,8 +45,12 @@ export default async function PlayPage({
     participantPromise,
   ]);
 
+  if (!participant) {
+    notFound();
+  }
+
   return (
-    <StudentGameView
+    <YearGamePlayView
       game={game}
       participant={participant}
       teams={teams || []}

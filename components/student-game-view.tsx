@@ -1,44 +1,55 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { type Database, supabase } from "@/lib/supabase"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Trophy, Users, Clock, Timer } from "lucide-react"
+import { useState, useEffect } from "react";
+import { type Database, supabase } from "@/lib/supabase";
+import { useGameUpdates, useTeamUpdates } from "@/hooks/use-realtime";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Trophy, Users, Clock, Timer } from "lucide-react";
+import { YearGamePlayView } from "./year-game-play-view";
+import { ScoreStealPlayView } from "./score-steal-play-view";
+import { RelayQuizPlayView } from "./relay-quiz-play-view";
 
 type Game = Database["public"]["Tables"]["games"]["Row"] & {
-  round1_timeout_seconds?: number
-}
-type Team = Database["public"]["Tables"]["teams"]["Row"]
-type Participant = Database["public"]["Tables"]["participants"]["Row"]
+  round1_timeout_seconds?: number;
+};
+type Team = Database["public"]["Tables"]["teams"]["Row"];
+type Participant = Database["public"]["Tables"]["participants"]["Row"];
 
 interface StudentGameViewProps {
-  game: Game
-  participant: Participant | null
-  teams: Team[]
+  game: Game;
+  participant: Participant | null;
+  teams: Team[];
 }
 
-export function StudentGameView({ game: initialGame, participant, teams: initialTeams }: StudentGameViewProps) {
-  const [game, setGame] = useState(initialGame)
-  const [teams, setTeams] = useState(initialTeams)
-  const [myTeam, setMyTeam] = useState<Team | null>(null)
-  const [remainingTime, setRemainingTime] = useState<number | null>(null)
+export function StudentGameView({
+  game: initialGame,
+  participant,
+  teams: initialTeams,
+}: StudentGameViewProps) {
+  const [game, setGame] = useState(initialGame);
+  const [teams, setTeams] = useState(initialTeams);
+  const [myTeam, setMyTeam] = useState<Team | null>(null);
+  const [remainingTime, setRemainingTime] = useState<number | null>(null);
 
   useEffect(() => {
-    // Find participant's team
     if (participant?.team_id) {
-      const team = teams.find((t) => t.id === participant.team_id)
-      setMyTeam(team || null)
+      const team = teams.find((t) => t.id === participant.team_id);
+      setMyTeam(team || null);
     }
+  }, [participant?.team_id, teams]);
 
-    // Timer logic for round 1
+  useEffect(() => {
     if (game.current_round === 1 && game.round1_timeout_seconds) {
-      if (remainingTime === null) {
-        setRemainingTime(game.round1_timeout_seconds);
-      }
-
+      setRemainingTime(game.round1_timeout_seconds);
       const timer = setInterval(() => {
-        setRemainingTime(prevTime => {
+        setRemainingTime((prevTime) => {
           if (prevTime === null || prevTime <= 1) {
             clearInterval(timer);
             return 0;
@@ -49,43 +60,82 @@ export function StudentGameView({ game: initialGame, participant, teams: initial
 
       return () => clearInterval(timer);
     }
+  }, [game.current_round, game.round1_timeout_seconds]);
 
-    // Subscribe to real-time updates
-    const channel = supabase
-      .channel("student-game")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "games", filter: `id=eq.${game.id}` },
-        (payload) => {
-          if (payload.eventType === "UPDATE") {
-            setGame(payload.new as Game)
-          }
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "teams", filter: `game_id=eq.${game.id}` },
-        (payload) => {
-          if (payload.eventType === "UPDATE") {
-            setTeams((prev) => prev.map((t) => (t.id === payload.new.id ? (payload.new as Team) : t)))
+  // Use the new realtime hooks
+  useGameUpdates(game.id, (updatedGame) => {
+    const newGame = updatedGame as Game;
+    setGame(newGame);
 
-            // Update my team if it's the one that changed
-            if (participant?.team_id === payload.new.id) {
-              setMyTeam(payload.new as Team)
-            }
-          }
-        },
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
+    // Reset timer when round changes
+    if (newGame.current_round !== game.current_round) {
+      if (newGame.current_round === 1 && newGame.round1_timeout_seconds) {
+        setRemainingTime(newGame.round1_timeout_seconds);
+      } else {
+        setRemainingTime(null);
+      }
     }
-  }, [game.id, participant?.team_id, teams])
+  });
 
-  const sortedTeams = [...teams].sort((a, b) => b.score - a.score)
-  const myTeamRank = myTeam ? sortedTeams.findIndex((t) => t.id === myTeam.id) + 1 : 0
+  useTeamUpdates(
+    game.id,
+    (newTeam) => {
+      setTeams((prev) => [...prev, newTeam as Team]);
+    },
+    (updatedTeam) => {
+      setTeams((prev) =>
+        prev.map((t) => (t.id === updatedTeam.id ? (updatedTeam as Team) : t))
+      );
+    },
+    (deletedTeam) => {
+      setTeams((prev) => prev.filter((t) => t.id !== deletedTeam.id));
+    }
+  );
 
+  const sortedTeams = [...teams].sort((a, b) => b.score - a.score);
+  const myTeamRank = myTeam
+    ? sortedTeams.findIndex((t) => t.id === myTeam.id) + 1
+    : 0;
+
+  // Render different components based on current round
+  if (game.status === "started") {
+    // Round 1: Year Game
+    if (game.current_round === 1) {
+      return (
+        <YearGamePlayView
+          game={game}
+          participant={participant!}
+          teams={teams}
+        />
+      );
+    }
+
+    // Round 2: Score Steal Game
+    if (game.current_round === 2) {
+      return (
+        <ScoreStealPlayView
+          gameId={game.id}
+          currentRound={game.current_round}
+          teamId={myTeam?.id || ""}
+          participantId={participant?.id || ""}
+        />
+      );
+    }
+
+    // Rounds 3-4: Relay Quiz Game
+    if (game.current_round === 3 || game.current_round === 4) {
+      return (
+        <RelayQuizPlayView
+          gameId={game.id}
+          currentRound={game.current_round}
+          teamId={myTeam?.id || ""}
+          participantId={participant?.id || ""}
+        />
+      );
+    }
+  }
+
+  // Default view for waiting status or unknown rounds
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-4">
       <div className="container mx-auto max-w-4xl space-y-6">
@@ -111,11 +161,16 @@ export function StudentGameView({ game: initialGame, participant, teams: initial
             </CardHeader>
             <CardContent>
               {remainingTime > 0 ? (
-                <p className="text-4xl font-bold">{Math.floor(remainingTime / 60)}:{(remainingTime % 60).toString().padStart(2, '0')}</p>
+                <p className="text-4xl font-bold">
+                  {Math.floor(remainingTime / 60)}:
+                  {(remainingTime % 60).toString().padStart(2, "0")}
+                </p>
               ) : (
                 <p className="text-2xl font-bold text-red-500">Time's up!</p>
               )}
-              <p className="text-sm text-muted-foreground">The admin can still enter scores.</p>
+              <p className="text-sm text-muted-foreground">
+                The admin can still enter scores.
+              </p>
             </CardContent>
           </Card>
         )}
@@ -147,8 +202,8 @@ export function StudentGameView({ game: initialGame, participant, teams: initial
           <CardContent>
             <div className="space-y-3">
               {sortedTeams.map((team, index) => {
-                const isMyTeam = myTeam?.id === team.id
-                const isWinning = index === 0 && team.score > 0
+                const isMyTeam = myTeam?.id === team.id;
+                const isWinning = index === 0 && team.score > 0;
 
                 return (
                   <div
@@ -159,8 +214,12 @@ export function StudentGameView({ game: initialGame, participant, teams: initial
                   >
                     <div className="flex items-center gap-3">
                       <div className="flex items-center gap-2">
-                        {isWinning && <Trophy className="h-5 w-5 text-yellow-500" />}
-                        <span className="font-medium text-lg">#{index + 1}</span>
+                        {isWinning && (
+                          <Trophy className="h-5 w-5 text-yellow-500" />
+                        )}
+                        <span className="font-medium text-lg">
+                          #{index + 1}
+                        </span>
                       </div>
                       <div>
                         <p className="font-medium">{team.team_name}</p>
@@ -176,7 +235,7 @@ export function StudentGameView({ game: initialGame, participant, teams: initial
                       <p className="text-sm text-muted-foreground">points</p>
                     </div>
                   </div>
-                )
+                );
               })}
             </div>
           </CardContent>
@@ -210,11 +269,12 @@ export function StudentGameView({ game: initialGame, participant, teams: initial
           <CardContent className="p-6">
             <h3 className="text-lg font-medium mb-2">Good luck!</h3>
             <p className="text-muted-foreground">
-              Work together with your team and have fun! The scores update automatically.
+              Work together with your team and have fun! The scores update
+              automatically.
             </p>
           </CardContent>
         </Card>
       </div>
     </div>
-  )
+  );
 }

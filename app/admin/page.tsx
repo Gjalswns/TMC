@@ -59,7 +59,7 @@ export default async function AdminPage() {
         </div>
       )}
 
-      <div className="grid gap-8 md:grid-cols-2 slide-up">
+      <div className="grid gap-8 md:grid-cols-3 slide-up">
         <InteractiveCard hoverScale glowEffect>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -95,6 +95,30 @@ export default async function AdminPage() {
             ) : (
               <div className="text-center text-muted-foreground py-8">Configure Supabase to view games</div>
             )}
+          </CardContent>
+        </InteractiveCard>
+
+        <InteractiveCard hoverScale>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-accent/20 rounded-lg flex items-center justify-center">
+                <span className="text-accent-foreground font-bold">❓</span>
+              </div>
+              Questions Management
+            </CardTitle>
+            <CardDescription>Upload and manage game questions</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-center space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Create Score Steal and Relay Quiz questions for your games
+              </p>
+              <Button asChild className="w-full">
+                <Link href="/admin/questions">
+                  Manage Questions
+                </Link>
+              </Button>
+            </div>
           </CardContent>
         </InteractiveCard>
       </div>
