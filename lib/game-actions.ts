@@ -136,6 +136,8 @@ export async function joinGame(
   studentId?: string
 ) {
   try {
+    console.log(`👤 Join game request: code=${gameCode}, nickname=${nickname}`);
+    
     // Validate inputs
     if (!nickname || nickname.trim().length < 2 || nickname.trim().length > 20) {
       return { 
@@ -151,72 +153,56 @@ export async function joinGame(
       };
     }
 
-    // Find the game with full information
+    // Find the game
     const { data: game, error: gameError } = await supabase
       .from("games")
-      .select("id, status, max_participants, join_deadline_minutes, created_at, game_expires_at")
+      .select("id")
       .eq("game_code", gameCode)
       .single();
 
     if (gameError || !game) {
+      console.error("❌ Game not found:", gameError);
       return { success: false, error: "Game not found" };
     }
 
-    // Use database function to validate join
-    const { data: validationResult, error: validationError } = await supabase
-      .rpc('validate_participant_join', {
+    // Use atomic database function to join game
+    // This prevents race conditions and ensures data integrity
+    const { data: result, error: joinError } = await supabase.rpc(
+      "join_game_atomic",
+      {
         p_game_id: game.id,
         p_nickname: nickname.trim(),
-        p_student_id: studentId?.trim() || null
-      });
-
-    if (validationError) {
-      console.error("Validation error:", validationError);
-      return { success: false, error: "Failed to validate join request" };
-    }
-
-    if (!validationResult.valid) {
-      return { success: false, error: validationResult.error };
-    }
-
-    // Add participant
-    const { data: participant, error: participantError } = await supabase
-      .from("participants")
-      .insert({
-        game_id: game.id,
-        nickname: nickname.trim(),
-        student_id: studentId?.trim() || null,
-      })
-      .select()
-      .single();
-
-    if (participantError) {
-      // Handle specific database errors
-      if (participantError.code === '23505') {
-        if (participantError.message.includes('unique_nickname_per_game')) {
-          return { success: false, error: "Nickname already taken in this game" };
-        }
-        if (participantError.message.includes('unique_student_id_per_game')) {
-          return { success: false, error: "Student ID already registered in this game" };
-        }
+        p_student_id: studentId?.trim() || null,
       }
-      throw participantError;
+    );
+
+    if (joinError) {
+      console.error("❌ Join error:", joinError);
+      return { success: false, error: "Failed to join game" };
     }
+
+    if (!result.success) {
+      console.warn("⚠️ Join failed:", result.error);
+      return { success: false, error: result.error };
+    }
+
+    console.log(`✅ Successfully joined game: participant_id=${result.participant_id}`);
 
     // Broadcast participant join event
     await broadcastGameEvent(game.id, 'participant-joined', {
-      participant,
-      participantCount: validationResult.participant_count + 1
+      participantId: result.participant_id,
+      nickname: nickname.trim(),
+      participantCount: result.participant_count
     });
 
     return { 
       success: true, 
       gameId: game.id, 
-      participantId: participant.id,
-      participantCount: validationResult.participant_count + 1
+      participantId: result.participant_id,
+      participantCount: result.participant_count
     };
   } catch (error) {
-    console.error("Error joining game:", error);
+    console.error("❌ Error joining game:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to join game",
