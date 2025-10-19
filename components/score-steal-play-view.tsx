@@ -24,27 +24,21 @@ import {
   Users,
   Trophy,
   AlertCircle,
-  CheckCircle,
-  XCircle,
+  Clock,
+  Zap,
+  Shield,
   Sword,
 } from "lucide-react";
 import {
-  submitScoreStealAttempt,
-  getScoreStealQuestions,
+  submitAnswerForRace,
+  getScoreStealSessionDetails,
+  getSessionAttempts,
   getAvailableTargets,
+  getProtectedTeams,
+  executeScoreSteal,
 } from "@/lib/score-steal-actions";
 import { useToast } from "@/components/ui/use-toast";
-import { supabase } from "@/lib/supabase";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { useScoreStealAttemptsUpdates } from "@/hooks/use-realtime";
-
-interface ScoreStealQuestion {
-  id: string;
-  question_text: string;
-  correct_answer: string;
-  difficulty: "easy" | "medium" | "hard";
-  points: number;
-}
 
 interface Team {
   id: string;
@@ -58,6 +52,7 @@ interface ScoreStealPlayViewProps {
   currentRound: number;
   teamId: string;
   participantId: string;
+  sessionId: string;
 }
 
 export function ScoreStealPlayView({
@@ -65,70 +60,72 @@ export function ScoreStealPlayView({
   currentRound,
   teamId,
   participantId,
+  sessionId,
 }: ScoreStealPlayViewProps) {
-  const [questions, setQuestions] = useState<ScoreStealQuestion[]>([]);
+  const [session, setSession] = useState<any>(null);
   const [teams, setTeams] = useState<Team[]>([]);
-  const [selectedTarget, setSelectedTarget] = useState<string>("");
-  const [selectedQuestion, setSelectedQuestion] = useState<string>("");
+  const [protectedTeams, setProtectedTeams] = useState<string[]>([]);
+  const [attempts, setAttempts] = useState<any[]>([]);
   const [answer, setAnswer] = useState("");
+  const [selectedTarget, setSelectedTarget] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [lastResult, setLastResult] = useState<{
-    isCorrect: boolean;
-    pointsGained: number;
-    pointsLost: number;
-  } | null>(null);
+  const [hasSubmitted, setHasSubmitted] = useState(false);
+  const [myAttempt, setMyAttempt] = useState<any>(null);
   const { toast } = useToast();
 
-  // Load questions and teams
+  // Load session details
+  const loadSessionData = useCallback(async () => {
+    const [sessionRes, teamsRes, protectedRes, attemptsRes] = await Promise.all([
+      getScoreStealSessionDetails(sessionId),
+      getAvailableTargets(gameId),
+      getProtectedTeams(gameId, currentRound),
+      getSessionAttempts(sessionId),
+    ]);
+
+    if (sessionRes.success && sessionRes.session) {
+      setSession(sessionRes.session);
+    }
+
+    if (teamsRes.success) {
+      setTeams(teamsRes.teams.filter((t: Team) => t.id !== teamId));
+    }
+
+    if (protectedRes.success) {
+      setProtectedTeams(protectedRes.protectedTeams.map((p: any) => p.team_id));
+    }
+
+    if (attemptsRes.success) {
+      setAttempts(attemptsRes.attempts);
+      
+      // Check if my team submitted
+      const myTeamAttempt = attemptsRes.attempts.find(
+        (a: any) => a.team_id === teamId
+      );
+      if (myTeamAttempt) {
+        setHasSubmitted(true);
+        setMyAttempt(myTeamAttempt);
+      }
+    }
+  }, [sessionId, gameId, currentRound, teamId]);
+
   useEffect(() => {
-    const loadData = async () => {
-      const [questionsResult, teamsResult] = await Promise.all([
-        getScoreStealQuestions(gameId, currentRound),
-        getAvailableTargets(gameId),
-      ]);
+    loadSessionData();
+  }, [loadSessionData]);
 
-      if (questionsResult.success) {
-        setQuestions(questionsResult.questions);
-      }
+  // Poll for updates every 1 second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadSessionData();
+    }, 1000);
 
-      if (teamsResult.success) {
-        // Filter out current team from targets
-        const otherTeams = teamsResult.teams.filter(
-          (team) => team.id !== teamId
-        );
-        setTeams(otherTeams);
-      }
-    };
-
-    loadData();
-  }, [gameId, teamId]);
-
-  // Real-time updates for team scores
-  const handleAttemptsUpdate = useCallback(
-    (newAttempt: any) => {
-      // Refresh teams data when new attempts are made
-      const refreshTeams = async () => {
-        const teamsResult = await getAvailableTargets(gameId);
-        if (teamsResult.success) {
-          const otherTeams = teamsResult.teams.filter(
-            (team) => team.id !== teamId
-          );
-          setTeams(otherTeams);
-        }
-      };
-      refreshTeams();
-    },
-    [gameId, teamId]
-  );
-
-  useScoreStealAttemptsUpdates(gameId, currentRound, handleAttemptsUpdate);
+    return () => clearInterval(interval);
+  }, [loadSessionData]);
 
   const handleSubmitAnswer = async () => {
-    if (!selectedTarget || !selectedQuestion || !answer.trim()) {
+    if (!answer.trim() || !session?.score_steal_questions) {
       toast({
-        title: "Error",
-        description:
-          "Please select a target team, question, and provide an answer",
+        title: "오류",
+        description: "정답을 입력해주세요",
         variant: "destructive",
       });
       return;
@@ -136,54 +133,45 @@ export function ScoreStealPlayView({
 
     setIsSubmitting(true);
     try {
-      const result = await submitScoreStealAttempt(
+      const result = await submitAnswerForRace(
+        sessionId,
         gameId,
         currentRound,
         teamId,
-        selectedQuestion,
-        selectedTarget,
-        answer.trim()
+        session.score_steal_questions.id,
+        answer.trim(),
+        session.score_steal_questions.correct_answer,
+        session.question_broadcast_at
       );
 
       if (result.success) {
-        setLastResult({
-          isCorrect: result.isCorrect,
-          pointsGained: result.pointsGained,
-          pointsLost: result.pointsLost,
+        setHasSubmitted(true);
+        setMyAttempt({
+          is_correct: result.isCorrect,
+          response_time_ms: result.responseTimeMs,
         });
-
-        // Refresh teams data
-        const teamsResult = await getAvailableTargets(gameId);
-        if (teamsResult.success) {
-          const otherTeams = teamsResult.teams.filter(
-            (team) => team.id !== teamId
-          );
-          setTeams(otherTeams);
-        }
-
-        // Clear form
-        setAnswer("");
-        setSelectedQuestion("");
-        setSelectedTarget("");
-
+        
         toast({
-          title: result.isCorrect ? "Correct!" : "Incorrect",
-          description: result.isCorrect
-            ? `You gained ${result.pointsGained} points!`
-            : `You lost ${Math.abs(result.pointsGained)} points.`,
+          title: result.isCorrect ? "정답!" : "오답",
+          description: result.isCorrect 
+            ? `응답 시간: ${result.responseTimeMs}ms` 
+            : "아쉽게도 틀렸습니다",
           variant: result.isCorrect ? "default" : "destructive",
         });
+
+        // Reload to see all attempts
+        await loadSessionData();
       } else {
         toast({
-          title: "Error",
-          description: result.error || "Failed to submit answer",
+          title: "오류",
+          description: result.error || "제출 실패",
           variant: "destructive",
         });
       }
     } catch (error) {
       toast({
-        title: "Error",
-        description: "Failed to submit answer",
+        title: "오류",
+        description: "정답 제출 중 오류가 발생했습니다",
         variant: "destructive",
       });
     } finally {
@@ -191,224 +179,463 @@ export function ScoreStealPlayView({
     }
   };
 
-  const selectedQuestionData = questions.find((q) => q.id === selectedQuestion);
-  const selectedTargetData = teams.find((t) => t.id === selectedTarget);
+  const handleSelectTarget = async () => {
+    if (!selectedTarget || !session) {
+      toast({
+        title: "오류",
+        description: "타겟 팀을 선택해주세요",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const result = await executeScoreSteal(
+        sessionId,
+        gameId,
+        currentRound,
+        teamId,
+        selectedTarget,
+        session.score_steal_questions.id,
+        session.score_steal_questions.points
+      );
+
+      if (result.success) {
+        toast({
+          title: "점수 뺏기 성공!",
+          description: `${result.pointsStolen}점을 획득했습니다!`,
+        });
+        
+        await loadSessionData();
+      } else {
+        toast({
+          title: "오류",
+          description: result.error || "점수 뺏기 실패",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "오류",
+        description: "점수 뺏기 중 오류가 발생했습니다",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const sortedTeams = [...teams].sort((a, b) => b.score - a.score);
+  const winnerAttempt = attempts.find((a) => a.is_winner);
+  const isWinner = winnerAttempt?.team_id === teamId;
+  const correctAttempts = attempts.filter((a) => a.is_correct);
 
-  return (
-    <div className="space-y-6">
-      {/* Game Header */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Sword className="h-5 w-5" />
-            Score Steal Game
-          </CardTitle>
-          <CardDescription>
-            Round {currentRound} - Attack other teams to steal their points!
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Alert>
-            <Target className="h-4 w-4" />
-            <AlertDescription>
-              Choose a target team and question. Answer correctly to steal
-              points, but be careful - wrong answers will cost you points!
-            </AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
-
-      {/* Attack Form */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Launch Attack</CardTitle>
-          <CardDescription>
-            Select your target and question, then submit your answer
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <Label htmlFor="target">Target Team</Label>
-              <Select value={selectedTarget} onValueChange={setSelectedTarget}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a team to attack" />
-                </SelectTrigger>
-                <SelectContent>
-                  {teams.map((team) => (
-                    <SelectItem key={team.id} value={team.id}>
-                      {team.team_name} ({team.score} points)
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <Label htmlFor="question">Question</Label>
-              <Select
-                value={selectedQuestion}
-                onValueChange={setSelectedQuestion}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a question" />
-                </SelectTrigger>
-                <SelectContent>
-                  {questions.map((question) => (
-                    <SelectItem key={question.id} value={question.id}>
-                      {question.difficulty.toUpperCase()} - {question.points}{" "}
-                      points
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {selectedQuestionData && (
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <h4 className="font-medium mb-2">Question:</h4>
-              <p className="text-sm">{selectedQuestionData.question_text}</p>
-              <div className="flex gap-2 mt-2">
-                <Badge variant="outline">
-                  {selectedQuestionData.difficulty}
-                </Badge>
-                <Badge variant="secondary">
-                  {selectedQuestionData.points} points
-                </Badge>
-              </div>
-            </div>
-          )}
-
-          <div>
-            <Label htmlFor="answer">Your Answer</Label>
-            <Input
-              id="answer"
-              value={answer}
-              onChange={(e) => setAnswer(e.target.value)}
-              placeholder="Enter your answer..."
-              onKeyPress={(e) => e.key === "Enter" && handleSubmitAnswer()}
-            />
-          </div>
-
-          <Button
-            onClick={handleSubmitAnswer}
-            disabled={
-              isSubmitting ||
-              !selectedTarget ||
-              !selectedQuestion ||
-              !answer.trim()
-            }
-            className="w-full"
-          >
-            {isSubmitting ? "Submitting..." : "Submit Attack"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Last Result */}
-      {lastResult && (
+  // Phase rendering
+  if (!session) {
+    return (
+      <div className="space-y-6">
         <Card>
           <CardContent className="pt-6">
-            <div
-              className={`flex items-center gap-3 p-4 rounded-lg ${
-                lastResult.isCorrect
-                  ? "bg-green-50 border-green-200"
-                  : "bg-red-50 border-red-200"
-              }`}
-            >
-              {lastResult.isCorrect ? (
-                <CheckCircle className="h-6 w-6 text-green-500" />
-              ) : (
-                <XCircle className="h-6 w-6 text-red-500" />
-              )}
-              <div>
-                <h4 className="font-medium">
-                  {lastResult.isCorrect
-                    ? "Attack Successful!"
-                    : "Attack Failed!"}
-                </h4>
-                <p className="text-sm text-muted-foreground">
-                  {lastResult.isCorrect
-                    ? `You gained ${lastResult.pointsGained} points!`
-                    : `You lost ${Math.abs(lastResult.pointsGained)} points.`}
-                </p>
-              </div>
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-primary mx-auto mb-4"></div>
+              <p>로딩 중...</p>
             </div>
           </CardContent>
         </Card>
-      )}
+      </div>
+    );
+  }
 
-      {/* Live Scoreboard */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Trophy className="h-5 w-5" />
-            Live Scoreboard
-          </CardTitle>
-          <CardDescription>Current team rankings and scores</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {sortedTeams.map((team, index) => (
-              <div
-                key={team.id}
-                className={`flex items-center justify-between p-3 rounded-lg ${
-                  index === 0 ? "bg-yellow-50 border-yellow-200" : "bg-muted/50"
-                } ${team.id === selectedTarget ? "ring-2 ring-red-200" : ""}`}
-              >
-                <div className="flex items-center gap-3">
-                  {index === 0 && (
-                    <Trophy className="h-5 w-5 text-yellow-500" />
-                  )}
-                  <span className="font-medium text-lg">#{index + 1}</span>
-                  <span className="font-medium">{team.team_name}</span>
-                  {team.id === selectedTarget && (
-                    <Badge variant="destructive">TARGET</Badge>
-                  )}
+  // Waiting for question
+  if (session.phase === "waiting") {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sword className="h-5 w-5" />
+              점수 뺏기 게임
+            </CardTitle>
+            <CardDescription>라운드 {currentRound}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Alert>
+              <Clock className="h-4 w-4" />
+              <AlertDescription>
+                관리자가 문제를 공개할 때까지 기다려주세요...
+              </AlertDescription>
+            </Alert>
+          </CardContent>
+        </Card>
+
+        {/* Scoreboard */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Trophy className="h-5 w-5" />
+              현재 순위
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {sortedTeams.map((team, index) => (
+                <div
+                  key={team.id}
+                  className={`flex items-center justify-between p-3 rounded-lg ${
+                    index === 0 ? "bg-yellow-50 border-yellow-200" : "bg-muted/50"
+                  } ${team.id === teamId ? "ring-2 ring-primary" : ""}`}
+                >
+                  <div className="flex items-center gap-3">
+                    {index === 0 && <Trophy className="h-5 w-5 text-yellow-500" />}
+                    <span className="font-medium text-lg">#{index + 1}</span>
+                    <span className="font-medium">{team.team_name}</span>
+                    {team.id === teamId && <Badge>우리 팀</Badge>}
+                    {protectedTeams.includes(team.id) && (
+                      <Badge variant="secondary">
+                        <Shield className="h-3 w-3 mr-1" />
+                        보호됨
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-2xl font-bold">{team.score}</div>
+                    <div className="text-sm text-muted-foreground">점</div>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-2xl font-bold">{team.score}</div>
-                  <div className="text-sm text-muted-foreground">points</div>
-                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Question active - answer input
+  if (session.phase === "question_active" && !hasSubmitted) {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Zap className="h-5 w-5 text-yellow-500" />
+              빠른 정답을 입력하세요!
+            </CardTitle>
+            <CardDescription>가장 먼저 정답을 맞춘 팀이 승리합니다</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="p-4 bg-muted/50 rounded-lg">
+              <h4 className="font-medium mb-2">문제:</h4>
+              <p className="text-lg">{session.score_steal_questions?.question_text}</p>
+              <div className="flex gap-2 mt-3">
+                <Badge variant="outline">
+                  {session.score_steal_questions?.difficulty}
+                </Badge>
+                <Badge variant="secondary">
+                  {session.score_steal_questions?.points}점
+                </Badge>
               </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+            </div>
 
-      {/* Game Rules */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertCircle className="h-5 w-5" />
-            Game Rules
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div>
-            <h4 className="font-medium">How to Play</h4>
-            <ul className="text-sm text-muted-foreground space-y-1 mt-1">
-              <li>• Select a target team and choose a question</li>
-              <li>• Answer correctly to steal points from the target team</li>
-              <li>
-                • Wrong answers will cost you points (half the question value)
-              </li>
-              <li>• Teams cannot go below 0 points</li>
-            </ul>
-          </div>
-          <div>
-            <h4 className="font-medium">Point Values</h4>
-            <ul className="text-sm text-muted-foreground space-y-1 mt-1">
-              <li>• Easy questions: 10 points (wrong = -5 points)</li>
-              <li>• Medium questions: 20 points (wrong = -10 points)</li>
-              <li>• Hard questions: 30 points (wrong = -15 points)</li>
-            </ul>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
+            <div>
+              <Label htmlFor="answer">정답</Label>
+              <Input
+                id="answer"
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+                placeholder="정답을 입력하세요..."
+                onKeyPress={(e) => e.key === "Enter" && handleSubmitAnswer()}
+                autoFocus
+              />
+            </div>
+
+            <Button
+              onClick={handleSubmitAnswer}
+              disabled={isSubmitting || !answer.trim()}
+              className="w-full"
+              size="lg"
+            >
+              {isSubmitting ? "제출 중..." : "제출하기"}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Submitted - waiting for results
+  if (session.phase === "question_active" && hasSubmitted) {
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>제출 완료</CardTitle>
+            <CardDescription>다른 팀의 응답을 기다리는 중...</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {myAttempt && (
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  {myAttempt.is_correct
+                    ? `정답입니다! 응답 시간: ${myAttempt.response_time_ms}ms`
+                    : "아쉽게도 틀렸습니다"}
+                </AlertDescription>
+              </Alert>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Submission Status */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              제출 현황
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {attempts.map((attempt) => (
+                <div
+                  key={attempt.id}
+                  className="flex items-center justify-between p-3 rounded-lg border"
+                >
+                  <div>
+                    <p className="font-medium">{attempt.teams?.team_name}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {attempt.response_time_ms}ms
+                    </p>
+                  </div>
+                  <Badge variant={attempt.is_correct ? "default" : "secondary"}>
+                    {attempt.is_correct ? "정답" : "오답"}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Winner selection phase
+  if (session.phase === "waiting_for_target") {
+    const winnerTeamName = winnerAttempt?.teams?.team_name || "승자";
+
+    if (isWinner) {
+      // Winner selects target
+      const availableTargets = sortedTeams.filter(
+        (t) => !protectedTeams.includes(t.id)
+      );
+
+      return (
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-green-600">
+                <Trophy className="h-6 w-6" />
+                승리!
+              </CardTitle>
+              <CardDescription>
+                응답 시간: {winnerAttempt?.response_time_ms}ms
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Alert>
+                <Target className="h-4 w-4" />
+                <AlertDescription>
+                  점수를 뺏을 팀을 선택하세요. 보호된 팀은 선택할 수 없습니다.
+                </AlertDescription>
+              </Alert>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>타겟 선택</CardTitle>
+              <CardDescription>
+                {session.score_steal_questions?.points}점을 뺏을 수 있습니다
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="target">타겟 팀</Label>
+                <Select value={selectedTarget} onValueChange={setSelectedTarget}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="타겟 팀을 선택하세요" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableTargets.map((team) => (
+                      <SelectItem key={team.id} value={team.id}>
+                        {team.team_name} ({team.score}점)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <Button
+                onClick={handleSelectTarget}
+                disabled={isSubmitting || !selectedTarget}
+                className="w-full"
+                size="lg"
+              >
+                {isSubmitting ? "처리 중..." : "점수 뺏기"}
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Protected teams info */}
+          {protectedTeams.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5" />
+                  보호된 팀
+                </CardTitle>
+                <CardDescription>
+                  이번 라운드에서 선택할 수 없는 팀들
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {teams
+                    .filter((t) => protectedTeams.includes(t.id))
+                    .map((team) => (
+                      <div
+                        key={team.id}
+                        className="flex items-center gap-2 p-2 rounded bg-muted/50"
+                      >
+                        <Shield className="h-4 w-4" />
+                        <span>{team.team_name}</span>
+                      </div>
+                    ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      );
+    } else {
+      // Other teams wait
+      return (
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-yellow-500" />
+                승자: {winnerTeamName}
+              </CardTitle>
+              <CardDescription>
+                응답 시간: {winnerAttempt?.response_time_ms}ms
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Alert>
+                <Clock className="h-4 w-4" />
+                <AlertDescription>
+                  승자가 타겟을 선택하는 중입니다...
+                </AlertDescription>
+              </Alert>
+            </CardContent>
+          </Card>
+
+          {/* Results */}
+          <Card>
+            <CardHeader>
+              <CardTitle>제출 결과</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {correctAttempts.map((attempt, index) => (
+                  <div
+                    key={attempt.id}
+                    className={`flex items-center justify-between p-3 rounded-lg ${
+                      attempt.is_winner
+                        ? "bg-yellow-50 border-yellow-200"
+                        : "bg-muted/50"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      {attempt.is_winner && (
+                        <Trophy className="h-5 w-5 text-yellow-500" />
+                      )}
+                      <span className="font-medium">#{index + 1}</span>
+                      <span>{attempt.teams?.team_name}</span>
+                    </div>
+                    <span className="text-sm text-muted-foreground">
+                      {attempt.response_time_ms}ms
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+  }
+
+  // Completed
+  if (session.phase === "completed") {
+    const winnerTeamName = winnerAttempt?.teams?.team_name || "승자";
+
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Trophy className="h-5 w-5 text-yellow-500" />
+              라운드 완료!
+            </CardTitle>
+            <CardDescription>승자: {winnerTeamName}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                다음 라운드를 기다려주세요
+              </AlertDescription>
+            </Alert>
+          </CardContent>
+        </Card>
+
+        {/* Final Scoreboard */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Trophy className="h-5 w-5" />
+              최종 순위
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {sortedTeams.map((team, index) => (
+                <div
+                  key={team.id}
+                  className={`flex items-center justify-between p-3 rounded-lg ${
+                    index === 0 ? "bg-yellow-50 border-yellow-200" : "bg-muted/50"
+                  } ${team.id === teamId ? "ring-2 ring-primary" : ""}`}
+                >
+                  <div className="flex items-center gap-3">
+                    {index === 0 && <Trophy className="h-5 w-5 text-yellow-500" />}
+                    <span className="font-medium text-lg">#{index + 1}</span>
+                    <span className="font-medium">{team.team_name}</span>
+                    {team.id === teamId && <Badge>우리 팀</Badge>}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-2xl font-bold">{team.score}</div>
+                    <div className="text-sm text-muted-foreground">점</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return null;
 }

@@ -3,28 +3,67 @@
 import { supabase } from "./supabase";
 import { revalidatePath } from "next/cache";
 
-// Broadcast game events to all connected clients
+// Broadcast game events to all connected clients with improved error handling
 async function broadcastGameEvent(gameId: string, eventType: string, data: any) {
-  try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/broadcast-game-event`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
-      },
-      body: JSON.stringify({
-        gameId,
-        eventType,
-        data
-      })
-    });
+  const maxRetries = 3;
+  const retryDelay = 1000;
 
-    if (!response.ok) {
-      console.error('Failed to broadcast event:', response.statusText);
-    }
-  } catch (error) {
-    console.error('Error broadcasting game event:', error);
+  // Skip if Edge Function URL is not configured
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+    console.log(`⚠️ Skipping broadcast (Edge Function not configured)`);
+    return;
   }
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`📡 Broadcasting ${eventType} (attempt ${attempt}/${maxRetries})`);
+      
+      // 5초 타임아웃 설정
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/broadcast-game-event`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}`
+          },
+          body: JSON.stringify({ gameId, eventType, data }),
+          signal: controller.signal
+        }
+      );
+      
+      clearTimeout(timeoutId);
+      
+      if (response.ok) {
+        console.log(`✅ Broadcast successful: ${eventType}`);
+        return;
+      }
+      
+      // 4xx 에러는 재시도 안함
+      if (response.status >= 400 && response.status < 500) {
+        console.warn(`⚠️ Client error (${response.status}), not retrying`);
+        return;
+      }
+      
+      // 5xx 에러는 재시도
+      if (attempt < maxRetries) {
+        console.warn(`⚠️ Server error (${response.status}), retrying in ${retryDelay * attempt}ms`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+        continue;
+      }
+    } catch (error) {
+      console.error(`❌ Broadcast error (attempt ${attempt}/${maxRetries}):`, error);
+      
+      if (attempt < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+      }
+    }
+  }
+  
+  console.warn(`⚠️ Broadcast failed after ${maxRetries} attempts - using Realtime instead`);
 }
 import { createYearGameSession } from "./year-game-actions";
 
@@ -33,12 +72,13 @@ function generateGameCode(): string {
 }
 
 export async function createGame(
-  formData: FormData | { title: string; gameType: string; rounds: number; maxParticipants?: number; joinDeadlineMinutes?: number }
+  formData: FormData | { title: string; gameType: string; teamCount: number; maxParticipants?: number; joinDeadlineMinutes?: number }
 ) {
   let title: string;
   let gameType: string;
   let duration: number = 60; // Fixed duration of 60 minutes
   let teamCount: number;
+  let totalRounds: number = 4; // TMC games always have 4 rounds
   let maxParticipants: number = 20;
   let joinDeadlineMinutes: number = 30;
 
@@ -54,7 +94,7 @@ export async function createGame(
     // New object format
     title = formData.title;
     gameType = formData.gameType;
-    teamCount = 4; // Default team count for Year Game
+    teamCount = formData.teamCount;
     maxParticipants = formData.maxParticipants || 20;
     joinDeadlineMinutes = formData.joinDeadlineMinutes || 30;
   }
@@ -94,7 +134,7 @@ export async function createGame(
         team_count: teamCount,
         game_code: gameCode,
         game_type: gameType,
-        total_rounds: 4, // Default to 4 rounds (Year Game + Score Steal + 2 Relay Quiz)
+        total_rounds: totalRounds,
         max_participants: maxParticipants,
         join_deadline_minutes: joinDeadlineMinutes,
         game_expires_at: new Date(Date.now() + duration * 60 * 1000).toISOString(), // Game expires after duration
@@ -136,6 +176,8 @@ export async function joinGame(
   studentId?: string
 ) {
   try {
+    console.log(`👤 Join game request: code=${gameCode}, nickname=${nickname}`);
+    
     // Validate inputs
     if (!nickname || nickname.trim().length < 2 || nickname.trim().length > 20) {
       return { 
@@ -151,72 +193,56 @@ export async function joinGame(
       };
     }
 
-    // Find the game with full information
+    // Find the game
     const { data: game, error: gameError } = await supabase
       .from("games")
-      .select("id, status, max_participants, join_deadline_minutes, created_at, game_expires_at")
+      .select("id")
       .eq("game_code", gameCode)
       .single();
 
     if (gameError || !game) {
+      console.error("❌ Game not found:", gameError);
       return { success: false, error: "Game not found" };
     }
 
-    // Use database function to validate join
-    const { data: validationResult, error: validationError } = await supabase
-      .rpc('validate_participant_join', {
+    // Use atomic database function to join game
+    // This prevents race conditions and ensures data integrity
+    const { data: result, error: joinError } = await supabase.rpc(
+      "join_game_atomic",
+      {
         p_game_id: game.id,
         p_nickname: nickname.trim(),
-        p_student_id: studentId?.trim() || null
-      });
-
-    if (validationError) {
-      console.error("Validation error:", validationError);
-      return { success: false, error: "Failed to validate join request" };
-    }
-
-    if (!validationResult.valid) {
-      return { success: false, error: validationResult.error };
-    }
-
-    // Add participant
-    const { data: participant, error: participantError } = await supabase
-      .from("participants")
-      .insert({
-        game_id: game.id,
-        nickname: nickname.trim(),
-        student_id: studentId?.trim() || null,
-      })
-      .select()
-      .single();
-
-    if (participantError) {
-      // Handle specific database errors
-      if (participantError.code === '23505') {
-        if (participantError.message.includes('unique_nickname_per_game')) {
-          return { success: false, error: "Nickname already taken in this game" };
-        }
-        if (participantError.message.includes('unique_student_id_per_game')) {
-          return { success: false, error: "Student ID already registered in this game" };
-        }
+        p_student_id: studentId?.trim() || null,
       }
-      throw participantError;
+    );
+
+    if (joinError) {
+      console.error("❌ Join error:", joinError);
+      return { success: false, error: "Failed to join game" };
     }
+
+    if (!result.success) {
+      console.warn("⚠️ Join failed:", result.error);
+      return { success: false, error: result.error };
+    }
+
+    console.log(`✅ Successfully joined game: participant_id=${result.participant_id}`);
 
     // Broadcast participant join event
     await broadcastGameEvent(game.id, 'participant-joined', {
-      participant,
-      participantCount: validationResult.participant_count + 1
+      participantId: result.participant_id,
+      nickname: nickname.trim(),
+      participantCount: result.participant_count
     });
 
     return { 
       success: true, 
       gameId: game.id, 
-      participantId: participant.id,
-      participantCount: validationResult.participant_count + 1
+      participantId: result.participant_id,
+      participantCount: result.participant_count
     };
   } catch (error) {
-    console.error("Error joining game:", error);
+    console.error("❌ Error joining game:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to join game",
@@ -420,6 +446,7 @@ export async function getGameForJoin(gameCode: string) {
         id,
         title,
         status,
+        game_code,
         max_participants,
         join_deadline_minutes,
         created_at,
@@ -435,7 +462,7 @@ export async function getGameForJoin(gameCode: string) {
 
     // Check if game is joinable
     const { data: isJoinable, error: joinableError } = await supabase
-      .rpc('is_game_joinable', { game_id: game.id });
+      .rpc('is_game_joinable', { target_game_id: game.id });
 
     if (joinableError) {
       console.error("Error checking if game is joinable:", joinableError);
@@ -478,9 +505,9 @@ export async function checkParticipantJoin(gameId: string, nickname: string, stu
   try {
     const { data: result, error } = await supabase
       .rpc('validate_participant_join', {
-        p_game_id: gameId,
-        p_nickname: nickname.trim(),
-        p_student_id: studentId?.trim() || null
+        target_game_id: gameId,
+        player_nickname: nickname.trim(),
+        player_student_id: studentId?.trim() || null
       });
 
     if (error) {

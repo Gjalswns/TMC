@@ -4,10 +4,12 @@ import JoinGameWithCode from "@/components/join-game-with-code";
 export default async function JoinPage({
   params,
 }: {
-  params: { code: string };
+  params: Promise<{ code: string }>;
 }) {
   try {
-    const result = await getGameForJoin(params.code);
+    // Await params in Next.js 15
+    const { code } = await params;
+    const result = await getGameForJoin(code);
 
     if (!result.success) {
       return (
@@ -15,7 +17,7 @@ export default async function JoinPage({
           <div className="text-center">
             <h1 className="text-4xl font-bold">Game not found</h1>
             <p className="text-lg text-gray-600 dark:text-gray-400 mt-2">
-              The game code "{params.code}" does not exist or is invalid.
+              The game code "{code}" does not exist or is invalid.
             </p>
           </div>
         </div>

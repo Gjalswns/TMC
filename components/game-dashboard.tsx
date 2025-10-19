@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { QRCodeSVG } from "qrcode.react";
+// QR 코드 제거됨
 import {
   startGame,
   updateScore,
@@ -433,24 +433,20 @@ export function GameDashboard({
       )}
 
       {game.status === "waiting" && (
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* QR Code and Join Info */}
+        <div className="grid gap-6 lg:grid-cols-1">
+          {/* Student Access Info (QR 코드 제거) */}
           <Card>
             <CardHeader>
               <CardTitle>Student Access</CardTitle>
               <CardDescription>
-                Students can join using the QR code or game code
+                Students can join using the game code
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex justify-center">
-                <QRCodeSVG value={gameUrl} size={200} />
-              </div>
               <div className="text-center space-y-2">
-                <p className="font-mono text-lg">{game.game_code}</p>
+                <p className="font-mono text-3xl font-bold">{game.game_code}</p>
                 <p className="text-sm text-muted-foreground">
-                  Students visit your site and enter this code, or scan the QR
-                  code above
+                  Students visit your site and enter this code
                 </p>
                 <Button
                   variant="outline"

@@ -9,80 +9,79 @@ import {
   type YearGameConfig,
 } from "./year-game-utils";
 
+// 재시도 로직을 위한 헬퍼 함수
+async function retryOperation<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = 3,
+  delayMs: number = 1000
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
+      console.warn(`⚠️ Attempt ${attempt}/${maxRetries} failed:`, error);
+      
+      if (attempt < maxRetries) {
+        // 지수 백오프를 사용한 재시도
+        await new Promise(resolve => 
+          setTimeout(resolve, delayMs * Math.pow(2, attempt - 1))
+        );
+      }
+    }
+  }
+  
+  throw lastError || new Error("Operation failed after retries");
+}
+
 /**
- * Create a new Year Game session
+ * Create and start a new Year Game session (1~100 범위)
  */
 export async function createYearGameSession(
   gameId: string,
   roundNumber: number,
-  timeLimit: number = 180
+  timeLimit: number = 600 // 10분으로 기본값 변경
 ) {
   try {
-    // Check if session already exists for this game and round
-    const { data: existingSession } = await supabase
+    console.log(`🎮 Creating Year Game session for game ${gameId}, round ${roundNumber}`);
+
+    // 기존 활성 세션 종료
+    await supabase
       .from("year_game_sessions")
-      .select("id")
-      .eq("game_id", gameId)
-      .eq("round_number", roundNumber)
-      .single();
-
-    if (existingSession) {
-      return {
-        success: false,
-        error: "Session already exists for this game and round",
-      };
-    }
-
-    const targetNumbers = generateTargetNumbers();
-
-    const { data: session, error } = await supabase
-      .from("year_game_sessions")
-      .insert({
-        game_id: gameId,
-        round_number: roundNumber,
-        target_numbers: targetNumbers,
-        time_limit_seconds: timeLimit,
-        status: "waiting",
+      .update({ 
+        status: "finished", 
+        ended_at: new Date().toISOString() 
       })
-      .select()
-      .single();
+      .eq("game_id", gameId)
+      .eq("status", "active");
+
+    // 새로운 데이터베이스 함수 호출
+    const { data, error } = await supabase.rpc('start_year_game_session', {
+      p_game_id: gameId,
+      p_round_number: roundNumber,
+      p_time_limit_seconds: timeLimit,
+      p_target_numbers: generateTargetNumbers() // 4개 숫자 생성
+    });
 
     if (error) throw error;
 
-    // Initialize results for all teams
-    const { data: teams, error: teamsError } = await supabase
-      .from("teams")
-      .select("id")
-      .eq("game_id", gameId);
-
-    if (teamsError) {
-      console.error("Error fetching teams:", teamsError);
-      // Continue anyway, results can be created later
+    const result = data?.[0];
+    if (!result?.success) {
+      throw new Error(result?.message || 'Failed to create session');
     }
 
-    if (teams && teams.length > 0) {
-      const results = teams.map((team) => ({
-        session_id: session.id,
-        team_id: team.id,
-        numbers_found: [],
-        total_found: 0,
-        score: 0,
-      }));
-
-      const { error: resultsError } = await supabase
-        .from("year_game_results")
-        .insert(results);
-
-      if (resultsError) {
-        console.error("Error creating team results:", resultsError);
-        // Continue anyway, results can be created later
-      }
-    }
-
+    console.log(`✅ Year Game session created: ${result.session_id}`);
+    
     revalidatePath(`/admin/game/${gameId}`);
-    return { success: true, session, targetNumbers };
+    return { 
+      success: true, 
+      sessionId: result.session_id,
+      message: result.message
+    };
   } catch (error) {
-    console.error("Error creating Year Game session:", error);
+    console.error("❌ Error creating Year Game session:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to create session",
@@ -95,6 +94,16 @@ export async function createYearGameSession(
  */
 export async function startYearGameSession(sessionId: string) {
   try {
+    // 세션 정보 먼저 가져오기
+    const { data: session, error: sessionError } = await supabase
+      .from("year_game_sessions")
+      .select("game_id")
+      .eq("id", sessionId)
+      .single();
+
+    if (sessionError) throw sessionError;
+
+    // 세션 상태 업데이트
     const { error } = await supabase
       .from("year_game_sessions")
       .update({
@@ -104,6 +113,38 @@ export async function startYearGameSession(sessionId: string) {
       .eq("id", sessionId);
 
     if (error) throw error;
+
+    // 브로드캐스트로 즉시 알림 (여러 채널 동시 사용)
+    const gameId = session.game_id;
+    const broadcastData = {
+      type: "year_game_started",
+      sessionId,
+      gameId,
+      timestamp: new Date().toISOString()
+    };
+
+    // 1. 게임별 채널
+    await supabase.channel(`game-${gameId}`).send({
+      type: "broadcast",
+      event: "year_game_started",
+      payload: broadcastData
+    });
+
+    // 2. 전체 게임 채널
+    await supabase.channel("games").send({
+      type: "broadcast", 
+      event: "year_game_started",
+      payload: broadcastData
+    });
+
+    // 3. Year Game 전용 채널
+    await supabase.channel(`year-game-${gameId}`).send({
+      type: "broadcast",
+      event: "session_started", 
+      payload: broadcastData
+    });
+
+    console.log(`📡 Broadcasted Year Game start to multiple channels for game ${gameId}`);
 
     revalidatePath("/admin");
     return { success: true };
@@ -143,7 +184,7 @@ export async function endYearGameSession(sessionId: string) {
 }
 
 /**
- * Submit a Year Game attempt
+ * Submit a Year Game attempt (팀 단위, 1~100 범위)
  */
 export async function submitYearGameAttempt(
   sessionId: string,
@@ -153,94 +194,48 @@ export async function submitYearGameAttempt(
   targetNumber: number
 ) {
   try {
-    // Get session data
-    const { data: session, error: sessionError } = await supabase
-      .from("year_game_sessions")
-      .select("target_numbers, status")
-      .eq("id", sessionId)
-      .single();
+    console.log(`🎯 Submitting Year Game attempt: team=${teamId}, target=${targetNumber}, expr=${expression}`);
+    
+    // 새로운 데이터베이스 함수 호출 (원자적 처리)
+    const { data, error } = await supabase.rpc('submit_year_game_team_attempt', {
+      p_session_id: sessionId,
+      p_team_id: teamId,
+      p_participant_id: participantId,
+      p_expression: expression,
+      p_target_number: targetNumber
+    });
 
-    if (sessionError || !session) {
-      return { success: false, error: "Session not found" };
+    if (error) throw error;
+
+    // JSON 응답 처리
+    const result = data;
+    if (!result?.success) {
+      console.warn("⚠️ Attempt failed:", result?.message);
+      return {
+        success: false,
+        error: result?.message || "Failed to submit attempt"
+      };
     }
 
-    if (session.status !== "active") {
-      return { success: false, error: "Session is not active" };
-    }
-
-    // Get already found numbers for this team
-    const { data: teamResult } = await supabase
-      .from("year_game_results")
-      .select("numbers_found")
-      .eq("session_id", sessionId)
-      .eq("team_id", teamId)
-      .single();
-
-    const alreadyFound = teamResult?.numbers_found || [];
-
-    // Validate the attempt
-    const attempt = validateYearGameAttempt(
-      expression,
-      session.target_numbers,
-      targetNumber,
-      alreadyFound
-    );
-
-    // Record the attempt
-    const { error: attemptError } = await supabase
-      .from("year_game_attempts")
-      .insert({
-        session_id: sessionId,
-        team_id: teamId,
-        participant_id: participantId,
-        expression: expression,
-        target_number: targetNumber,
-        is_valid: attempt.isValid,
-        is_correct: attempt.isCorrect,
-        is_duplicate: attempt.isDuplicate,
-      });
-
-    if (attemptError) throw attemptError;
-
-    // If the attempt is correct and not duplicate, update team results
-    if (attempt.isCorrect && !attempt.isDuplicate) {
-      const newNumbersFound = [...alreadyFound, targetNumber].sort(
-        (a, b) => a - b
-      );
-      const newScore = calculateScore(newNumbersFound);
-
-      const { error: updateError } = await supabase
-        .from("year_game_results")
-        .update({
-          numbers_found: newNumbersFound,
-          total_found: newNumbersFound.length,
-          score: newScore,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("session_id", sessionId)
-        .eq("team_id", teamId);
-
-      if (updateError) throw updateError;
-
-      // Update team score in teams table using RPC function for consistency
-      const { error: teamScoreError } = await supabase.rpc('update_team_score', {
-        team_id: teamId,
-        new_score: newScore
-      });
-
-      if (teamScoreError) {
-        console.error("Failed to update team score:", teamScoreError);
-      }
-    }
-
+    console.log(`✅ Attempt submitted: valid=${result.is_valid}, correct=${result.is_correct}, duplicate=${result.is_duplicate}, new=${result.is_new_number}`);
+    
     revalidatePath("/admin");
     return {
       success: true,
-      attempt,
-      isNewNumber: attempt.isCorrect && !attempt.isDuplicate,
+      attempt: {
+        id: result.attempt_id,
+        isValid: result.is_valid,
+        isCorrect: result.is_correct,
+        isDuplicate: result.is_duplicate,
+        error: result.is_duplicate ? "Number already found by your team" : null,
+      },
+      isNewNumber: result.is_new_number,
+      teamScore: result.team_score,
+      teamTotalFound: result.team_total_found,
+      message: result.message
     };
   } catch (error) {
-    console.error("Error submitting Year Game attempt:", error);
+    console.error("❌ Error submitting Year Game attempt:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to submit attempt",

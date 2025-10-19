@@ -3,12 +3,12 @@ import { GameWaitingRoom } from "@/components/game-waiting-room";
 import { notFound } from "next/navigation";
 
 interface WaitPageProps {
-  params: {
+  params: Promise<{
     id: string;
-  };
-  searchParams: {
+  }>;
+  searchParams: Promise<{
     participant?: string;
-  };
+  }>;
 }
 
 export default async function WaitPage({
@@ -16,10 +16,14 @@ export default async function WaitPage({
   searchParams,
 }: WaitPageProps) {
   try {
+    // Await params and searchParams in Next.js 15
+    const { id } = await params;
+    const resolvedSearchParams = await searchParams;
+    
     const { data: game, error: gameError } = await supabase
       .from("games")
       .select("*")
-      .eq("id", params.id)
+      .eq("id", id)
       .single();
 
     if (gameError || !game) {
@@ -27,7 +31,6 @@ export default async function WaitPage({
       notFound();
     }
 
-    const resolvedSearchParams = await searchParams;
     const participantId = resolvedSearchParams.participant;
     let participant = null;
 

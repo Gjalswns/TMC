@@ -16,7 +16,8 @@ export default function JoinGameWithCode({
   game,
 }: {
   game: { 
-    id: string; 
+    id: string;
+    game_code: string;
     title: string; 
     max_participants?: number;
     currentParticipants?: number;
@@ -62,7 +63,7 @@ export default function JoinGameWithCode({
     setIsLoading(true);
 
     try {
-      const result = await joinGame(game.id, nickname.trim(), studentId.trim() || undefined);
+      const result = await joinGame(game.game_code, nickname.trim(), studentId.trim() || undefined);
 
       if (result.success) {
         // Store participant info and navigate to waiting room
@@ -79,17 +80,40 @@ export default function JoinGameWithCode({
 
         router.push(`/game/${game.id}/wait?participant=${result.participantId}`);
       } else {
+        // 구체적인 오류 메시지 처리
+        let errorMessage = result.error || "게임 참가에 실패했습니다.";
+        
+        if (result.error?.includes("check_nickname_format")) {
+          errorMessage = "닉네임 형식이 올바르지 않습니다. 한글, 영문, 숫자만 사용 가능하며 2-20자 사이여야 합니다.";
+        } else if (result.error?.includes("violates check constraint")) {
+          errorMessage = "입력한 정보의 형식이 올바르지 않습니다. 다시 확인해주세요.";
+        } else if (result.error?.includes("duplicate")) {
+          errorMessage = "이미 사용 중인 닉네임입니다. 다른 닉네임을 사용해주세요.";
+        }
+        
         toast({
           title: "게임 참가 실패",
-          description: result.error || "게임 참가에 실패했습니다.",
+          description: errorMessage,
           variant: "destructive",
         });
       }
     } catch (error) {
       console.error("Unexpected error during join:", error);
+      
+      // 서버 오류 메시지 파싱
+      let errorMessage = "예상치 못한 오류가 발생했습니다. 다시 시도해주세요.";
+      
+      if (error instanceof Error) {
+        if (error.message.includes("check_nickname_format")) {
+          errorMessage = "닉네임 형식이 올바르지 않습니다. 한글, 영문, 숫자만 사용 가능하며 2-20자 사이여야 합니다.";
+        } else if (error.message.includes("Internal server error")) {
+          errorMessage = "서버 오류가 발생했습니다. 닉네임과 학생 ID를 다시 확인해주세요.";
+        }
+      }
+      
       toast({
         title: "오류",
-        description: "예상치 못한 오류가 발생했습니다. 다시 시도해주세요.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {

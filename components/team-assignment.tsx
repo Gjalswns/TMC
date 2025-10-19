@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { assignTeams } from "@/lib/game-actions"
-import { Users, Shuffle } from "lucide-react"
+import { Users, Shuffle, X } from "lucide-react"
 
 type Team = Database["public"]["Tables"]["teams"]["Row"]
 type Participant = Database["public"]["Tables"]["participants"]["Row"]
@@ -89,6 +89,46 @@ export function TeamAssignment({ teams, participants, gameId, onAssignmentChange
     return assignedParticipants.filter((p) => p.team_id === teamId)
   }
 
+  // Handle team change for assigned participant
+  const handleTeamChange = async (participantId: string, newTeamId: string) => {
+    setIsLoading(true)
+    try {
+      const result = await assignTeams(gameId, [{ participantId, teamId: newTeamId }])
+      if (result.success) {
+        const updatedParticipants = participants.map((p) =>
+          p.id === participantId ? { ...p, team_id: newTeamId } : p
+        )
+        onAssignmentChange(updatedParticipants)
+      } else {
+        alert(result.error)
+      }
+    } catch (error) {
+      alert("Failed to change team")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Handle removing participant from team
+  const handleRemoveFromTeam = async (participantId: string) => {
+    setIsLoading(true)
+    try {
+      const result = await assignTeams(gameId, [{ participantId, teamId: null as any }])
+      if (result.success) {
+        const updatedParticipants = participants.map((p) =>
+          p.id === participantId ? { ...p, team_id: null } : p
+        )
+        onAssignmentChange(updatedParticipants)
+      } else {
+        alert(result.error)
+      }
+    } catch (error) {
+      alert("Failed to remove from team")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -156,12 +196,40 @@ export function TeamAssignment({ teams, participants, gameId, onAssignmentChange
                       <h5 className="font-medium">{team.team_name}</h5>
                       <Badge variant="secondary">{teamParticipants.length} members</Badge>
                     </div>
-                    <div className="flex flex-wrap gap-1">
+                    <div className="flex flex-wrap gap-2">
                       {teamParticipants.map((participant) => (
-                        <Badge key={participant.id} variant="outline" className="text-xs">
-                          {participant.nickname}
-                        </Badge>
+                        <div key={participant.id} className="flex items-center gap-1 bg-secondary rounded-md p-1.5">
+                          <span className="text-xs font-medium">{participant.nickname}</span>
+                          <Select
+                            value={participant.team_id || ""}
+                            onValueChange={(teamId) => handleTeamChange(participant.id, teamId)}
+                            disabled={isLoading}
+                          >
+                            <SelectTrigger className="h-5 w-5 p-0 border-0 hover:bg-muted">
+                              <Users className="h-3 w-3" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {teams.map((t) => (
+                                <SelectItem key={t.id} value={t.id}>
+                                  {t.team_name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-5 w-5 p-0 hover:bg-destructive/20"
+                            onClick={() => handleRemoveFromTeam(participant.id)}
+                            disabled={isLoading}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </div>
                       ))}
+                      {teamParticipants.length === 0 && (
+                        <p className="text-xs text-muted-foreground italic">No members yet</p>
+                      )}
                     </div>
                   </CardContent>
                 </Card>

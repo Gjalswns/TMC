@@ -15,6 +15,7 @@ import { Trophy, Users, Clock, Timer } from "lucide-react";
 import { YearGamePlayView } from "./year-game-play-view";
 import { ScoreStealPlayView } from "./score-steal-play-view";
 import { RelayQuizPlayView } from "./relay-quiz-play-view";
+import { getScoreStealSession } from "@/lib/score-steal-actions";
 
 type Game = Database["public"]["Tables"]["games"]["Row"] & {
   round1_timeout_seconds?: number;
@@ -37,6 +38,7 @@ export function StudentGameView({
   const [teams, setTeams] = useState(initialTeams);
   const [myTeam, setMyTeam] = useState<Team | null>(null);
   const [remainingTime, setRemainingTime] = useState<number | null>(null);
+  const [scoreStealSessionId, setScoreStealSessionId] = useState<string>("");
 
   useEffect(() => {
     if (participant?.team_id) {
@@ -44,6 +46,25 @@ export function StudentGameView({
       setMyTeam(team || null);
     }
   }, [participant?.team_id, teams]);
+
+  // Fetch Score Steal session ID when on round 2
+  useEffect(() => {
+    if (game.current_round === 2) {
+      const fetchSession = async () => {
+        const { data } = await supabase
+          .from("score_steal_sessions")
+          .select("id")
+          .eq("game_id", game.id)
+          .eq("round_number", game.current_round)
+          .single();
+        
+        if (data) {
+          setScoreStealSessionId(data.id);
+        }
+      };
+      fetchSession();
+    }
+  }, [game.current_round, game.id]);
 
   useEffect(() => {
     if (game.current_round === 1 && game.round1_timeout_seconds) {
@@ -111,13 +132,14 @@ export function StudentGameView({
     }
 
     // Round 2: Score Steal Game
-    if (game.current_round === 2) {
+    if (game.current_round === 2 && scoreStealSessionId) {
       return (
         <ScoreStealPlayView
           gameId={game.id}
           currentRound={game.current_round}
           teamId={myTeam?.id || ""}
           participantId={participant?.id || ""}
+          sessionId={scoreStealSessionId}
         />
       );
     }

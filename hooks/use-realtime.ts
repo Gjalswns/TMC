@@ -1,99 +1,145 @@
-import { useEffect, useRef, useCallback } from "react";
-import { supabase } from "@/lib/supabase";
-import {
-  RealtimeChannel,
-  RealtimePostgresChangesPayload,
-} from "@supabase/supabase-js";
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { 
+  createRealtimeSubscription,
+  subscribeToTable,
+  subscribeToInserts,
+  subscribeToUpdates,
+  subscribeToDeletes
+} from '@/lib/realtime';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
-interface RealtimeSubscriptionOptions {
-  table: string;
-  event?: "INSERT" | "UPDATE" | "DELETE" | "*";
+interface RealtimeSubscriptionOptions<T extends string> {
+  table: T;
+  event?: 'INSERT' | 'UPDATE' | 'DELETE' | '*';
   filter?: string;
   onInsert?: (payload: any) => void;
   onUpdate?: (payload: any) => void;
   onDelete?: (payload: any) => void;
-  onAny?: (payload: any) => void;
+  onError?: (error: Error) => void;
 }
 
-export function useRealtime(options: RealtimeSubscriptionOptions) {
-  const channelRef = useRef<RealtimeChannel | null>(null);
+export function useRealtime<T extends string>({
+  table,
+  event = '*',
+  filter,
+  onInsert,
+  onUpdate,
+  onDelete,
+  onError,
+}: RealtimeSubscriptionOptions<T>) {
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const subscriptionRef = useRef<{ disconnect: () => Promise<void> } | null>(null);
+
+  const handleError = useCallback((err: Error) => {
+    console.error(`Realtime error on ${table}:`, err);
+    setError(err);
+    onError?.(err);
+  }, [onError, table]);
 
   useEffect(() => {
-    const channelName = `realtime-${options.table}-${Date.now()}`;
+    const setupSubscription = async () => {
+      try {
+        // Clean up existing subscription if it exists
+        if (subscriptionRef.current) {
+          await subscriptionRef.current.disconnect();
+          subscriptionRef.current = null;
+        }
 
-    channelRef.current = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes" as any,
-        {
-          event: options.event || "*",
-          schema: "public",
-          table: options.table,
-          filter: options.filter,
-        },
-        (payload: RealtimePostgresChangesPayload<any>) => {
-          console.log(`Realtime event on ${options.table}:`, payload);
-
-          switch (payload.eventType) {
-            case "INSERT":
-              options.onInsert?.(payload);
-              break;
-            case "UPDATE":
-              options.onUpdate?.(payload);
-              break;
-            case "DELETE":
-              options.onDelete?.(payload);
-              break;
-            default:
-              options.onAny?.(payload);
+        // Create new subscription with the appropriate handler based on the event type
+        if (event === 'INSERT' && onInsert) {
+          subscriptionRef.current = subscribeToInserts(
+            table,
+            (payload) => {
+              console.log(`📡 Realtime INSERT on ${table}:`, payload);
+              onInsert(payload);
+            },
+            handleError
+          );
+        } else if (event === 'UPDATE' && onUpdate) {
+          if (!filter) {
+            throw new Error('Filter is required for UPDATE events');
           }
+          subscriptionRef.current = subscribeToUpdates(
+            table,
+            filter,
+            (payload) => {
+              console.log(`📡 Realtime UPDATE on ${table}:`, payload);
+              onUpdate(payload);
+            },
+            handleError
+          );
+        } else if (event === 'DELETE' && onDelete) {
+          subscriptionRef.current = subscribeToDeletes(
+            table,
+            (payload) => {
+              console.log(`📡 Realtime DELETE on ${table}:`, payload);
+              onDelete(payload);
+            },
+            handleError
+          );
+        } else {
+          // Handle multiple event types or custom logic
+          subscriptionRef.current = subscribeToTable(table, {
+            onInsert: (payload) => {
+              console.log(`📡 Realtime INSERT on ${table}:`, payload);
+              onInsert?.(payload);
+            },
+            onUpdate: (payload) => {
+              console.log(`📡 Realtime UPDATE on ${table}:`, payload);
+              onUpdate?.(payload);
+            },
+            onDelete: (payload) => {
+              console.log(`📡 Realtime DELETE on ${table}:`, payload);
+              onDelete?.(payload);
+            },
+            onError: handleError,
+          });
         }
-      )
-      .subscribe((status) => {
-        console.log(
-          `Realtime subscription status for ${options.table}:`,
-          status
-        );
 
-        if (status === "SUBSCRIBED") {
-          console.log(`✅ Successfully subscribed to ${options.table} table`);
-        } else if (status === "CHANNEL_ERROR") {
-          console.error(`❌ Failed to subscribe to ${options.table} table`);
-        } else if (status === "TIMED_OUT") {
-          console.warn(`⏰ Subscription to ${options.table} table timed out`);
-        } else if (status === "CLOSED") {
-          console.log(`🔒 Subscription to ${options.table} table closed`);
-        }
-      });
-
-    return () => {
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
+        // Update connection status
+        setIsConnected(true);
+        console.log(`✅ Successfully subscribed to ${table} table`);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        handleError(error);
       }
     };
-  }, [
-    options.table,
-    options.event,
-    options.filter,
-    options.onInsert,
-    options.onUpdate,
-    options.onDelete,
-    options.onAny,
-  ]);
 
-  return channelRef.current;
+    setupSubscription();
+
+    // Cleanup function
+    return () => {
+      const cleanup = async () => {
+        if (subscriptionRef.current) {
+          try {
+            await subscriptionRef.current.disconnect();
+            console.log(`🔒 Unsubscribed from ${table} table`);
+          } catch (err) {
+            console.error(`Error unsubscribing from ${table}:`, err);
+          } finally {
+            subscriptionRef.current = null;
+            setIsConnected(false);
+          }
+        }
+      };
+      cleanup();
+    };
+  }, [table, event, filter, onInsert, onUpdate, onDelete, handleError]);
+
+  return { isConnected, error };
 }
 
-// 특화된 훅들
+// Specialized hooks for common use cases
 export function useGameUpdates(gameId: string, onUpdate: (game: any) => void) {
   const handleUpdate = useCallback(
-    (payload: any) => onUpdate(payload.new),
+    (payload: any) => onUpdate(payload.new || payload),
     [onUpdate]
   );
 
   return useRealtime({
-    table: "games",
-    event: "UPDATE",
+    table: 'games',
+    event: 'UPDATE',
     filter: `id=eq.${gameId}`,
     onUpdate: handleUpdate,
   });
@@ -106,21 +152,21 @@ export function useParticipantUpdates(
   onDelete: (participant: any) => void
 ) {
   const handleInsert = useCallback(
-    (payload: any) => onInsert(payload.new),
+    (payload: any) => onInsert(payload.new || payload),
     [onInsert]
   );
   const handleUpdate = useCallback(
-    (payload: any) => onUpdate(payload.new),
+    (payload: any) => onUpdate(payload.new || payload),
     [onUpdate]
   );
   const handleDelete = useCallback(
-    (payload: any) => onDelete(payload.old),
+    (payload: any) => onDelete(payload.old || payload),
     [onDelete]
   );
 
   return useRealtime({
-    table: "participants",
-    event: "*",
+    table: 'participants',
+    event: '*',
     filter: `game_id=eq.${gameId}`,
     onInsert: handleInsert,
     onUpdate: handleUpdate,
@@ -135,21 +181,21 @@ export function useTeamUpdates(
   onDelete: (team: any) => void
 ) {
   const handleInsert = useCallback(
-    (payload: any) => onInsert(payload.new),
+    (payload: any) => onInsert(payload.new || payload),
     [onInsert]
   );
   const handleUpdate = useCallback(
-    (payload: any) => onUpdate(payload.new),
+    (payload: any) => onUpdate(payload.new || payload),
     [onUpdate]
   );
   const handleDelete = useCallback(
-    (payload: any) => onDelete(payload.old),
+    (payload: any) => onDelete(payload.old || payload),
     [onDelete]
   );
 
   return useRealtime({
-    table: "teams",
-    event: "*",
+    table: 'teams',
+    event: '*',
     filter: `game_id=eq.${gameId}`,
     onInsert: handleInsert,
     onUpdate: handleUpdate,
@@ -163,12 +209,12 @@ export function useYearGameSessionUpdates(
   onUpdate: (session: any) => void
 ) {
   const handleUpdate = useCallback(
-    (payload: any) => onUpdate(payload.new),
+    (payload: any) => onUpdate(payload.new || payload),
     [onUpdate]
   );
 
   return useRealtime({
-    table: "year_game_sessions",
+    table: 'year_game_sessions',
     event: "UPDATE",
     filter: `game_id=eq.${gameId}`,
     onUpdate: handleUpdate,
@@ -209,8 +255,8 @@ export function useYearGameAttemptsUpdates(
   });
 }
 
-// Score Steal Game specific hooks
-export function useScoreStealSessionUpdates(
+// Score Steal Game specific hooks (legacy - old mode)
+export function useScoreStealSessionUpdatesByGame(
   gameId: string,
   onUpdate: (session: any) => void
 ) {
@@ -294,5 +340,110 @@ export function useRelayQuizAttemptsUpdates(
     event: "INSERT",
     filter: `session_id=eq.${sessionId}`,
     onInsert: handleInsert,
+  });
+}
+
+// Score Steal - Realtime Competition Mode Hooks
+
+export function useScoreStealSessionUpdates(
+  sessionId: string,
+  onUpdate: (session: any) => void
+) {
+  const handleUpdate = useCallback(
+    (payload: any) => onUpdate(payload.new),
+    [onUpdate]
+  );
+
+  return useRealtime({
+    table: "score_steal_sessions",
+    event: "UPDATE",
+    filter: `id=eq.${sessionId}`,
+    onUpdate: handleUpdate,
+  });
+}
+
+export function useScoreStealAttemptUpdates(
+  sessionId: string,
+  onInsert: (attempt: any) => void
+) {
+  const handleInsert = useCallback(
+    (payload: any) => onInsert(payload.new),
+    [onInsert]
+  );
+
+  return useRealtime({
+    table: "score_steal_attempts",
+    event: "INSERT",
+    filter: `session_id=eq.${sessionId}`,
+    onInsert: handleInsert,
+  });
+}
+
+export function useQuestionBroadcast(
+  sessionId: string,
+  onBroadcast: (session: any) => void
+) {
+  const handleUpdate = useCallback(
+    (payload: any) => {
+      const session = payload.new;
+      // Only trigger when question is broadcast (phase changes to question_active)
+      if (session.phase === "question_active" && session.question_broadcast_at) {
+        onBroadcast(session);
+      }
+    },
+    [onBroadcast]
+  );
+
+  return useRealtime({
+    table: "score_steal_sessions",
+    event: "UPDATE",
+    filter: `id=eq.${sessionId}`,
+    onUpdate: handleUpdate,
+  });
+}
+
+export function useWinnerAnnouncement(
+  sessionId: string,
+  onWinner: (session: any) => void
+) {
+  const handleUpdate = useCallback(
+    (payload: any) => {
+      const session = payload.new;
+      // Only trigger when winner is determined (phase changes to waiting_for_target)
+      if (session.phase === "waiting_for_target" && session.winner_team_id) {
+        onWinner(session);
+      }
+    },
+    [onWinner]
+  );
+
+  return useRealtime({
+    table: "score_steal_sessions",
+    event: "UPDATE",
+    filter: `id=eq.${sessionId}`,
+    onUpdate: handleUpdate,
+  });
+}
+
+export function useScoreStealExecution(
+  sessionId: string,
+  onComplete: (session: any) => void
+) {
+  const handleUpdate = useCallback(
+    (payload: any) => {
+      const session = payload.new;
+      // Only trigger when score steal is complete
+      if (session.phase === "completed") {
+        onComplete(session);
+      }
+    },
+    [onComplete]
+  );
+
+  return useRealtime({
+    table: "score_steal_sessions",
+    event: "UPDATE",
+    filter: `id=eq.${sessionId}`,
+    onUpdate: handleUpdate,
   });
 }

@@ -130,7 +130,7 @@ export function RelayQuizAdmin({
 
       // Load questions
       const questionsResult = await getRelayQuizQuestions(gameId, currentRound);
-      if (questionsResult.success) {
+      if (questionsResult.success && questionsResult.questions) {
         setQuestions(questionsResult.questions);
         // Update question order for new question
         setNewQuestion((prev) => ({
@@ -376,8 +376,8 @@ export function RelayQuizAdmin({
 
   const progressPercentage = session?.time_limit_seconds
     ? ((session.time_limit_seconds - remainingTime) /
-        session.time_limit_seconds) *
-      100
+      session.time_limit_seconds) *
+    100
     : 0;
 
   const sortedTeams =
@@ -421,8 +421,8 @@ export function RelayQuizAdmin({
                       session.status === "active"
                         ? "default"
                         : session.status === "finished"
-                        ? "secondary"
-                        : "outline"
+                          ? "secondary"
+                          : "outline"
                     }
                   >
                     {session.status === "waiting" && "Waiting to Start"}
@@ -610,11 +610,10 @@ export function RelayQuizAdmin({
                   return (
                     <div
                       key={team.team_id}
-                      className={`p-4 rounded-lg border ${
-                        isWinning
-                          ? "bg-yellow-50 border-yellow-200"
-                          : "bg-muted/50"
-                      }`}
+                      className={`p-4 rounded-lg border ${isWinning
+                        ? "bg-yellow-50 border-yellow-200"
+                        : "bg-muted/50"
+                        }`}
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-3">

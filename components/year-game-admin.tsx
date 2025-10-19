@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Card,
   CardContent,
@@ -23,6 +23,7 @@ import {
   Users,
   Calculator,
   BarChart3,
+  AlertCircle,
 } from "lucide-react";
 import {
   createYearGameSession,
@@ -75,60 +76,181 @@ export function YearGameAdmin({
   const [session, setSession] = useState<YearGameSession | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [remainingTime, setRemainingTime] = useState<number>(0);
-  const [customNumbers, setCustomNumbers] = useState<number[]>([1, 2, 3, 4]);
+  // 랜덤 숫자 생성 함수
+  const generateRandomNumbers = () => {
+    const numbers = [];
+    while (numbers.length < 4) {
+      const num = Math.floor(Math.random() * 10); // 0-9
+      if (!numbers.includes(num)) {
+        numbers.push(num);
+      }
+    }
+    return numbers.sort((a, b) => a - b);
+  };
+
+  const [customNumbers, setCustomNumbers] = useState<number[]>(() => generateRandomNumbers());
   const [showNumberInput, setShowNumberInput] = useState(false);
-  const [numberInputs, setNumberInputs] = useState<number[]>([1, 2, 3, 4]);
+  const [numberInputs, setNumberInputs] = useState<number[]>(() => generateRandomNumbers());
   const { toast } = useToast();
 
   // Load existing session or create new one
   useEffect(() => {
+    let isMounted = true;
+    
     const loadSession = async () => {
       console.log(
         `🔍 Loading Year Game session for game ${gameId}, round ${currentRound}`
       );
 
-      // Check if there's already an active session
-      const { data: existingSession } = await supabase
-        .from("year_game_sessions")
-        .select("*")
-        .eq("game_id", gameId)
-        .eq("round_number", currentRound)
-        .eq("status", "waiting")
-        .single();
+      try {
+        // Check if there's already a session (any status)
+        const { data: existingSession, error } = await supabase
+          .from("year_game_sessions")
+          .select(`
+            *,
+            year_game_results (
+              id,
+              team_id,
+              numbers_found,
+              total_found,
+              score,
+              updated_at,
+              teams (
+                id,
+                team_name,
+                team_number,
+                score
+              )
+            )
+          `)
+          .eq("game_id", gameId)
+          .eq("round_number", currentRound)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .single();
 
-      if (existingSession) {
-        console.log("✅ Found existing Year Game session:", existingSession);
-        setSession(existingSession);
-      } else {
-        console.log("⚠️ No existing session found, creating new one...");
-        // Create new session if none exists
-        await createNewSession();
+        if (!isMounted) return;
+
+        if (error && error.code !== "PGRST116") {
+          console.error("❌ Error loading session:", error);
+          return;
+        }
+
+        if (existingSession) {
+          console.log("✅ Found existing Year Game session with", 
+            existingSession.year_game_results?.length || 0, "team results");
+          setSession(existingSession);
+        } else {
+          console.log("⚠️ No existing session found");
+          setSession(null);
+        }
+      } catch (error) {
+        console.error("❌ Failed to load session:", error);
+        if (isMounted) {
+          toast({
+            title: "오류",
+            description: "세션 로드 중 오류가 발생했습니다",
+            variant: "destructive",
+          });
+        }
       }
     };
+    
     loadSession();
+    
+    return () => {
+      isMounted = false;
+    };
   }, [gameId, currentRound]);
 
-  // Timer for active sessions
+  // Poll for results updates periodically (fallback if realtime fails)
+  useEffect(() => {
+    if (!session?.id) return;
+    
+    const pollInterval = setInterval(async () => {
+      console.log("🔄 Polling for year game results updates...");
+      
+      try {
+        const { data: updatedResults, error } = await supabase
+          .from("year_game_results")
+          .select(`
+            id,
+            team_id,
+            numbers_found,
+            total_found,
+            score,
+            updated_at,
+            teams (
+              id,
+              team_name,
+              team_number,
+              score
+            )
+          `)
+          .eq("session_id", session.id);
+        
+        if (error) {
+          console.error("❌ Error polling results:", error);
+          return;
+        }
+        
+        if (updatedResults) {
+          setSession(prev => {
+            if (!prev) return prev;
+            
+            // Check if any results have changed
+            const hasChanges = updatedResults.some((newResult: any) => {
+              const oldResult = prev.year_game_results?.find((r: any) => r.id === newResult.id);
+              return !oldResult || 
+                     oldResult.score !== newResult.score ||
+                     oldResult.total_found !== newResult.total_found;
+            });
+            
+            if (hasChanges) {
+              console.log("📊 Results updated via polling");
+              return { ...prev, year_game_results: updatedResults };
+            }
+            
+            return prev;
+          });
+        }
+      } catch (error) {
+        console.error("❌ Error in polling:", error);
+      }
+    }, 3000); // Poll every 3 seconds as fallback
+
+    return () => clearInterval(pollInterval);
+  }, [session?.id]);
+
+  // Timer for active sessions - calculates from server time each tick
   useEffect(() => {
     if (session?.status === "active" && session.started_at) {
-      const startTime = new Date(session.started_at).getTime();
-      const timeLimit = session.time_limit_seconds * 1000;
-      const elapsed = Date.now() - startTime;
-      const remaining = Math.max(0, timeLimit - elapsed);
+      // Calculate remaining time based on server start time
+      const calculateRemainingTime = () => {
+        const startTime = new Date(session.started_at!).getTime();
+        const timeLimit = session.time_limit_seconds * 1000;
+        const elapsed = Date.now() - startTime;
+        const remaining = Math.max(0, timeLimit - elapsed);
+        return Math.floor(remaining / 1000);
+      };
 
-      setRemainingTime(Math.floor(remaining / 1000));
+      // Set initial time
+      setRemainingTime(calculateRemainingTime());
 
+      // Update every second by recalculating from server time
       const timer = setInterval(() => {
-        setRemainingTime((prev) => {
-          if (prev <= 1) {
-            clearInterval(timer);
-            return 0;
-          }
-          return prev - 1;
-        });
+        const remaining = calculateRemainingTime();
+        setRemainingTime(remaining);
+        
+        if (remaining <= 0) {
+          clearInterval(timer);
+        }
       }, 1000);
 
       return () => clearInterval(timer);
+    } else if (session?.status !== "active") {
+      // Reset timer when not active
+      setRemainingTime(0);
     }
   }, [session?.status, session?.started_at, session?.time_limit_seconds]);
 
@@ -172,7 +294,7 @@ export function YearGameAdmin({
         .eq("game_id", gameId);
 
       if (teams && teams.length > 0) {
-        const results = teams.map((team) => ({
+        const results = teams.map((team: any) => ({
           session_id: session.id,
           team_id: team.id,
           numbers_found: [],
@@ -183,7 +305,29 @@ export function YearGameAdmin({
         await supabase.from("year_game_results").insert(results);
       }
 
-      setSession(session);
+      // Reload session with results
+      const { data: sessionWithResults } = await supabase
+        .from("year_game_sessions")
+        .select(`
+          *,
+          year_game_results (
+            id,
+            team_id,
+            numbers_found,
+            total_found,
+            score,
+            teams (
+              id,
+              team_name,
+              team_number,
+              score
+            )
+          )
+        `)
+        .eq("id", session.id)
+        .single();
+
+      setSession(sessionWithResults || session);
       toast({
         title: "Session Created",
         description: `Year Game session created with numbers: ${numbersToUse.join(
@@ -207,13 +351,110 @@ export function YearGameAdmin({
 
     setIsLoading(true);
     try {
+      console.log(`🚀 Starting Year Game session ${session.id} for game ${gameId}`);
+      
+      // 게임 ID 유효성 확인
+      if (!gameId) {
+        throw new Error("Game ID is missing or invalid");
+      }
+      
+      // 여러 방법으로 즉시 알림
+      // 1. localStorage에 게임 시작 신호 저장
+      localStorage.setItem(`game-started-${gameId}`, Date.now().toString());
+      localStorage.setItem(`year-game-active-${gameId}`, session.id);
+      console.log(`📱 Set localStorage signals for game ${gameId}`);
+
+      // 1. Year Game 세션 시작
       const response = await startYearGameSession(session.id);
       if (response.success) {
+        console.log("✅ Year Game session started successfully");
+        
+        // 2. 게임 상태를 'started'로 변경 (중요!)
+        console.log(`🎮 Updating game ${gameId} status to 'started', round ${currentRound}`);
+        
+        const { data: gameUpdateData, error: gameUpdateError } = await supabase
+          .from("games")
+          .update({ 
+            status: "started",
+            current_round: currentRound,
+            started_at: new Date().toISOString()
+          })
+          .eq("id", gameId)
+          .select();
+
+        if (gameUpdateError) {
+          console.error("❌ Failed to update game status:", {
+            error: gameUpdateError,
+            gameId,
+            currentRound,
+            message: gameUpdateError.message,
+            details: gameUpdateError.details,
+            hint: gameUpdateError.hint
+          });
+          
+          // 게임 상태 업데이트 실패해도 계속 진행 (세션은 이미 시작됨)
+          toast({
+            title: "Warning",
+            description: "Game session started but status update failed. Students should still be able to play.",
+            variant: "destructive",
+          });
+        } else {
+          console.log("✅ Game status updated to 'started':", gameUpdateData);
+        }
+
         // Reload session data
         const sessionResponse = await getYearGameSession(session.id);
         if (sessionResponse.success) {
           setSession(sessionResponse.session);
         }
+        
+        // 추가 브로드캐스트 (여러 방법 동시 사용)
+        try {
+          // 1. 직접 브로드캐스트 (여러 채널)
+          const channels = [
+            `emergency-${gameId}`,
+            `game-${gameId}`,
+            `year-game-${gameId}`,
+            "games"
+          ];
+
+          for (const channelName of channels) {
+            await supabase.channel(channelName).send({
+              type: "broadcast",
+              event: "game_force_start",
+              payload: { 
+                gameId, 
+                sessionId: session.id, 
+                timestamp: Date.now(),
+                status: "started",
+                current_round: currentRound
+              }
+            });
+          }
+
+          // 2. 커스텀 이벤트 발생
+          window.dispatchEvent(new CustomEvent('gameStarted', { 
+            detail: { 
+              gameId, 
+              sessionId: session.id,
+              status: "started",
+              current_round: currentRound
+            } 
+          }));
+
+          // 3. 추가 localStorage 신호 (게임 상태 업데이트 실패 대비)
+          localStorage.setItem(`force-redirect-${gameId}`, Date.now().toString());
+          localStorage.setItem(`game-status-${gameId}`, JSON.stringify({
+            status: "started",
+            current_round: currentRound,
+            started_at: new Date().toISOString()
+          }));
+
+          console.log(`📡 Sent emergency broadcasts to ${channels.length} channels for game ${gameId}`);
+        } catch (broadcastError) {
+          console.warn("Broadcast failed, but game started:", broadcastError);
+        }
+
         toast({
           title: "Year Game Started!",
           description:
@@ -221,6 +462,8 @@ export function YearGameAdmin({
         });
         onGameUpdate?.();
       } else {
+        // 실패 시 localStorage 신호 제거
+        localStorage.removeItem(`game-started-${gameId}`);
         toast({
           title: "Error",
           description: response.error || "Failed to start session",
@@ -228,6 +471,8 @@ export function YearGameAdmin({
         });
       }
     } catch (error) {
+      // 실패 시 localStorage 신호 제거
+      localStorage.removeItem(`game-started-${gameId}`);
       toast({
         title: "Error",
         description: "Failed to start session",
@@ -296,29 +541,53 @@ export function YearGameAdmin({
   const handleResultsUpdate = useCallback(
     (updatedResult: any) => {
       console.log("📊 Year Game result updated via websocket:", updatedResult);
-      if (session?.year_game_results) {
-        const updatedResults = session.year_game_results.map((result) =>
-          result.id === updatedResult.id ? updatedResult : result
+      setSession((prev) => {
+        if (!prev || !prev.year_game_results) {
+          console.log("⚠️ No session or results to update");
+          return prev;
+        }
+
+        // Find and update the specific result
+        const existingIndex = prev.year_game_results.findIndex(
+          (result) => result.id === updatedResult.id
         );
-        setSession((prev) =>
-          prev ? { ...prev, year_game_results: updatedResults } : null
-        );
-      }
+
+        if (existingIndex !== -1) {
+          // Update existing result
+          const updatedResults = [...prev.year_game_results];
+          updatedResults[existingIndex] = {
+            ...updatedResults[existingIndex],
+            ...updatedResult,
+          };
+          console.log("✅ Updated result at index:", existingIndex);
+          return { ...prev, year_game_results: updatedResults };
+        } else {
+          // Add new result if not found
+          console.log("➕ Adding new result to session");
+          return {
+            ...prev,
+            year_game_results: [...prev.year_game_results, updatedResult],
+          };
+        }
+      });
     },
-    [session?.year_game_results]
+    []
   );
 
   useYearGameSessionUpdates(gameId, handleSessionUpdate);
   useYearGameResultsUpdates(session?.id || "", handleResultsUpdate);
 
-  const progressPercentage = session?.time_limit_seconds
-    ? ((session.time_limit_seconds - remainingTime) /
-        session.time_limit_seconds) *
-      100
-    : 0;
+  // Memoize calculations to prevent unnecessary re-calculations
+  const progressPercentage = useMemo(() => {
+    if (!session?.time_limit_seconds) return 0;
+    return ((session.time_limit_seconds - remainingTime) / session.time_limit_seconds) * 100;
+  }, [session?.time_limit_seconds, remainingTime]);
 
-  const sortedResults =
-    session?.year_game_results?.sort((a, b) => b.score - a.score) || [];
+  // Memoize sorted results to prevent re-sorting on every render
+  const sortedResults = useMemo(() => {
+    if (!session?.year_game_results) return [];
+    return [...session.year_game_results].sort((a, b) => b.score - a.score);
+  }, [session?.year_game_results]);
 
   if (!session) {
     return (
@@ -373,6 +642,13 @@ export function YearGameAdmin({
             
             <div className="flex gap-2">
               <Button
+                onClick={() => setNumberInputs(generateRandomNumbers())}
+                variant="outline"
+                disabled={isLoading}
+              >
+                🎲 Random Numbers
+              </Button>
+              <Button
                 onClick={createNewSession}
                 disabled={isLoading}
                 className="flex-1"
@@ -414,31 +690,56 @@ export function YearGameAdmin({
             </div>
 
             {showNumberInput ? (
-              <div className="grid grid-cols-4 gap-2 mb-4">
-                {session.target_numbers.map((num, index) => (
-                  <Input
-                    key={index}
-                    type="number"
-                    min="0"
-                    max="9"
-                    value={num}
-                    onChange={async (e) => {
-                      const newNumbers = [...session.target_numbers];
-                      newNumbers[index] = parseInt(e.target.value) || 0;
+              <div className="space-y-2">
+                <div className="grid grid-cols-4 gap-2">
+                  {session.target_numbers.map((num, index) => (
+                    <Input
+                      key={index}
+                      type="number"
+                      min="0"
+                      max="9"
+                      value={num}
+                      onChange={async (e) => {
+                        const newNumbers = [...session.target_numbers];
+                        newNumbers[index] = parseInt(e.target.value) || 0;
 
-                      // Update in database
-                      const { error } = await supabase
-                        .from("year_game_sessions")
-                        .update({ target_numbers: newNumbers })
-                        .eq("id", session.id);
+                        // Update in database
+                        const { error } = await supabase
+                          .from("year_game_sessions")
+                          .update({ target_numbers: newNumbers })
+                          .eq("id", session.id);
 
-                      if (!error) {
-                        setSession({ ...session, target_numbers: newNumbers });
-                      }
-                    }}
-                    className="text-center"
-                  />
-                ))}
+                        if (!error) {
+                          setSession({ ...session, target_numbers: newNumbers });
+                        }
+                      }}
+                      className="text-center"
+                    />
+                  ))}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    const newNumbers = generateRandomNumbers();
+                    
+                    // Update in database
+                    const { error } = await supabase
+                      .from("year_game_sessions")
+                      .update({ target_numbers: newNumbers })
+                      .eq("id", session.id);
+
+                    if (!error) {
+                      setSession({ ...session, target_numbers: newNumbers });
+                      toast({
+                        title: "Numbers Updated",
+                        description: `New numbers: ${newNumbers.join(", ")}`,
+                      });
+                    }
+                  }}
+                >
+                  🎲 Generate Random
+                </Button>
               </div>
             ) : (
               <div className="flex gap-2">
@@ -541,8 +842,8 @@ export function YearGameAdmin({
                     key={result.team_id}
                     className={`p-4 rounded-lg border ${
                       isWinning
-                        ? "bg-yellow-50 border-yellow-200"
-                        : "bg-muted/50"
+                        ? "bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-700"
+                        : "bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-700"
                     }`}
                   >
                     <div className="flex items-center justify-between mb-2">
@@ -567,23 +868,23 @@ export function YearGameAdmin({
 
                     <div className="mb-2">
                       <div className="flex items-center justify-between text-sm mb-1">
-                        <span>Numbers Found: {result.total_found}/50</span>
+                        <span>Numbers Found: {result.total_found}/100</span>
                         <span>
-                          {Math.round((result.total_found / 50) * 100)}%
+                          {Math.round((result.total_found / 100) * 100)}%
                         </span>
                       </div>
                       <Progress
-                        value={(result.total_found / 50) * 100}
+                        value={(result.total_found / 100) * 100}
                         className="h-2"
                       />
                     </div>
 
                     <div className="grid grid-cols-10 gap-1">
-                      {Array.from({ length: 50 }, (_, i) => i + 1).map(
+                      {Array.from({ length: 100 }, (_, i) => i + 1).map(
                         (num) => (
                           <div
                             key={num}
-                            className={`w-6 h-6 rounded text-xs flex items-center justify-center font-medium ${
+                            className={`w-7 h-7 rounded text-xs flex items-center justify-center font-medium ${
                               result.numbers_found.includes(num)
                                 ? "bg-green-500 text-white"
                                 : "bg-gray-200 text-gray-600"
@@ -620,27 +921,25 @@ export function YearGameAdmin({
         </CardHeader>
         <CardContent className="space-y-3">
           <div>
-            <h4 className="font-medium">Objective</h4>
+            <h4 className="font-medium">게임 목표</h4>
             <p className="text-sm text-muted-foreground">
-              Teams must use the 4 target numbers exactly once each to create
-              mathematical expressions that equal numbers from 1 to 50.
+              각 팀은 4개의 숫자를 정확히 한 번씩 사용하여 1부터 100까지의 숫자를 만드는 수식을 작성해야 합니다.
             </p>
           </div>
 
           <div>
-            <h4 className="font-medium">Allowed Operations</h4>
+            <h4 className="font-medium">허용되는 연산</h4>
             <p className="text-sm text-muted-foreground">
-              + (addition), - (subtraction), × (multiplication), ÷ (division), ^
-              (exponentiation), log (logarithm), ↑↑ (tetration), and
-              parentheses.
+              + (덧셈), - (뺄셈), × (곱셈), ÷ (나눗셈), ^ (거듭제곱), nPr (순열), nCr (조합), 괄호
             </p>
           </div>
 
           <div>
-            <h4 className="font-medium">Scoring</h4>
+            <h4 className="font-medium">점수 시스템</h4>
             <p className="text-sm text-muted-foreground">
-              Each number found = 1 point. Bonus points for consecutive number
-              sequences.
+              • 각 숫자 = 그 숫자만큼 점수<br/>
+              • 예) 76을 만들면 76점 획득<br/>
+              • 팀 단위로 점수 합산
             </p>
           </div>
         </CardContent>

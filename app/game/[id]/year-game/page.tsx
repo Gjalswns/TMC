@@ -3,33 +3,36 @@ import { YearGamePlayView } from "@/components/year-game-play-view";
 import { notFound } from "next/navigation";
 
 interface YearGamePageProps {
-  params: {
+  params: Promise<{
     id: string;
-  };
-  searchParams: {
+  }>;
+  searchParams: Promise<{
     participant?: string;
-  };
+  }>;
 }
 
 export default async function YearGamePage({
   params,
   searchParams,
 }: YearGamePageProps) {
+  // Await params and searchParams in Next.js 15
+  const { id } = await params;
+  const resolvedSearchParams = await searchParams;
+  
   const { data: game } = await supabase
     .from("games")
     .select("*")
-    .eq("id", params.id)
+    .eq("id", id)
     .single();
 
   if (!game) {
     notFound();
   }
 
-  const resolvedSearchParams = await searchParams;
   const teamsPromise = supabase
     .from("teams")
     .select("*")
-    .eq("game_id", params.id)
+    .eq("game_id", id)
     .order("team_number");
 
   const participantPromise = resolvedSearchParams.participant

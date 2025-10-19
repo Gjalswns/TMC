@@ -34,8 +34,10 @@ const formSchema = z.object({
   gameType: z.string().min(1, {
     message: "Please select a game type.",
   }),
-  rounds: z.coerce.number().min(1, {
-    message: "Must have at least 1 round.",
+  teamCount: z.coerce.number().min(2, {
+    message: "Must have at least 2 teams.",
+  }).max(10, {
+    message: "Cannot have more than 10 teams.",
   }),
 });
 
@@ -49,42 +51,76 @@ export function CreateGameForm() {
     defaultValues: {
       title: "",
       gameType: "year-game", // Default to Year Game as per README
-      rounds: 3,
+      teamCount: 4, // Default to 4 teams for TMC games
     },
   });
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
+    console.log("🎮 Form validation passed! Creating game with values:", values);
     setIsSubmitting(true);
+    
     try {
+      console.log("🎮 Calling createGame action...");
       const result = await createGame(values);
+      console.log("🎮 Game creation result:", result);
+      
       if (result.success) {
+        console.log("✅ Game created successfully! Game ID:", result.gameId);
         toast({
           title: "Success!",
-          description: `Game "${values.title}" has been created.`,
+          description: `Game "${values.title}" has been created. Code: ${result.gameCode}`,
         });
+        
+        console.log("🎮 Redirecting to game page...");
         router.push(`/admin/game/${result.gameId}`);
       } else {
+        console.error("❌ Game creation failed:", result.error);
         toast({
           title: "Error",
-          description:
-            result.error || "Failed to create the game. Please try again.",
+          description: result.error || "Failed to create the game. Please try again.",
           variant: "destructive",
         });
       }
     } catch (error) {
+      console.error("❌ Exception during game creation:", error);
       toast({
         title: "Error",
-        description: "Failed to create the game. Please try again.",
+        description: `Failed to create the game: ${(error as Error).message}`,
         variant: "destructive",
       });
     } finally {
+      console.log("🎮 Form submission complete, resetting loading state");
       setIsSubmitting(false);
     }
   }
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+      <form 
+        onSubmit={(e) => {
+          e.preventDefault();
+          console.log("🎮 Form submit event triggered");
+          console.log("🎮 Form values:", form.getValues());
+          console.log("🎮 Form errors:", form.formState.errors);
+          console.log("🎮 Form is valid:", form.formState.isValid);
+          
+          form.handleSubmit(
+            (data) => {
+              console.log("✅ Validation passed, calling onSubmit with:", data);
+              onSubmit(data);
+            },
+            (errors) => {
+              console.error("❌ Form validation failed:", errors);
+              toast({
+                title: "Validation Error",
+                description: "Please check all fields and try again.",
+                variant: "destructive",
+              });
+            }
+          )(e);
+        }} 
+        className="space-y-8"
+      >
         <FormField
           control={form.control}
           name="title"
@@ -127,21 +163,38 @@ export function CreateGameForm() {
         />
         <FormField
           control={form.control}
-          name="rounds"
+          name="teamCount"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Number of Rounds</FormLabel>
-              <FormControl>
-                <Input type="number" {...field} />
-              </FormControl>
+              <FormLabel>Number of Teams</FormLabel>
+              <Select onValueChange={(value) => field.onChange(parseInt(value))} defaultValue={field.value?.toString()}>
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select number of teams" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="2">2 Teams</SelectItem>
+                  <SelectItem value="3">3 Teams</SelectItem>
+                  <SelectItem value="4">4 Teams (Recommended)</SelectItem>
+                  <SelectItem value="5">5 Teams</SelectItem>
+                  <SelectItem value="6">6 Teams</SelectItem>
+                  <SelectItem value="8">8 Teams</SelectItem>
+                  <SelectItem value="10">10 Teams</SelectItem>
+                </SelectContent>
+              </Select>
               <FormDescription>
-                How many rounds will the game have?
+                How many teams will participate in the game?
               </FormDescription>
               <FormMessage />
             </FormItem>
           )}
         />
-        <Button type="submit" disabled={isSubmitting}>
+        <Button 
+          type="submit" 
+          disabled={isSubmitting}
+          onClick={() => console.log("🎮 Button clicked, form state:", form.formState)}
+        >
           {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Create Game
         </Button>

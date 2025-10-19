@@ -3,41 +3,43 @@ import { StudentGameView } from "@/components/student-game-view";
 import { notFound, redirect } from "next/navigation";
 
 interface PlayPageProps {
-  params: {
+  params: Promise<{
     id: string;
-  };
-  searchParams: {
+  }>;
+  searchParams: Promise<{
     participant?: string;
-  };
+  }>;
 }
 
 export default async function PlayPage({
   params,
   searchParams,
 }: PlayPageProps) {
+  // Await params and searchParams in Next.js 15
+  const { id } = await params;
+  const resolvedSearchParams = await searchParams;
+  
   const { data: game } = await supabase
     .from("games")
     .select("*")
-    .eq("id", params.id)
+    .eq("id", id)
     .single();
 
   if (!game) {
     notFound();
   }
 
-  const resolvedSearchParams = await searchParams;
-
   // If participant is provided, redirect to game selection
   if (resolvedSearchParams.participant) {
     redirect(
-      `/game/${params.id}/select?participant=${resolvedSearchParams.participant}`
+      `/game/${id}/select?participant=${resolvedSearchParams.participant}`
     );
   }
 
   const teamsPromise = supabase
     .from("teams")
     .select("*")
-    .eq("game_id", params.id)
+    .eq("game_id", id)
     .order("score", { ascending: false });
 
   const participantPromise = resolvedSearchParams.participant

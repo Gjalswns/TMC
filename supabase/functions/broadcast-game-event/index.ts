@@ -36,25 +36,63 @@ serve(async (req) => {
       )
     }
 
-    // Broadcast the event to all connected clients for this game
-    const channel = supabaseClient.channel(`game-${gameId}`)
+    console.log(`📡 Broadcasting event: ${eventType} for game ${gameId}`)
+
+    // Create channel with unique name to avoid conflicts
+    const channelName = `game-${gameId}-broadcast-${Date.now()}`
+    const channel = supabaseClient.channel(channelName)
     
-    const broadcastResult = await channel.send({
-      type: 'broadcast',
-      event: eventType,
-      payload: {
-        gameId,
-        timestamp: new Date().toISOString(),
-        data,
-        targetUsers
-      }
+    // Subscribe to channel first, then send
+    await new Promise((resolve, reject) => {
+      channel
+        .on('broadcast', { event: '*' }, () => {}) // Listen to any broadcast
+        .subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            console.log(`✅ Channel subscribed: ${channelName}`)
+            
+            try {
+              // Send broadcast message
+              const sendResult = await channel.send({
+                type: 'broadcast',
+                event: eventType,
+                payload: {
+                  gameId,
+                  timestamp: new Date().toISOString(),
+                  data,
+                  targetUsers
+                }
+              })
+              
+              console.log(`📤 Broadcast sent:`, sendResult)
+              
+              // Clean up channel after sending
+              setTimeout(async () => {
+                await supabaseClient.removeChannel(channel)
+                console.log(`🧹 Channel cleaned up: ${channelName}`)
+              }, 100)
+              
+              resolve(sendResult)
+            } catch (error) {
+              console.error(`❌ Failed to send broadcast:`, error)
+              reject(error)
+            }
+          } else if (status === 'CHANNEL_ERROR') {
+            console.error(`❌ Channel subscription error`)
+            reject(new Error('Failed to subscribe to channel'))
+          } else if (status === 'TIMED_OUT') {
+            console.error(`⏰ Channel subscription timeout`)
+            reject(new Error('Channel subscription timed out'))
+          }
+        })
     })
 
     return new Response(
       JSON.stringify({ 
         success: true, 
         message: 'Event broadcasted successfully',
-        result: broadcastResult
+        gameId,
+        eventType,
+        timestamp: new Date().toISOString()
       }),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -62,11 +100,12 @@ serve(async (req) => {
     )
 
   } catch (error) {
-    console.error('Error broadcasting game event:', error)
+    console.error('❌ Error broadcasting game event:', error)
     return new Response(
       JSON.stringify({ 
         error: 'Failed to broadcast event',
-        details: error.message 
+        details: error.message,
+        stack: error.stack
       }),
       { 
         status: 500, 

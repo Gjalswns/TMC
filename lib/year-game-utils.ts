@@ -301,37 +301,17 @@ export function validateYearGameAttempt(
 }
 
 /**
- * Calculate score based on numbers found
+ * Calculate score based on numbers found (팀 단위 점수 시스템)
+ * 새로운 점수 시스템: 각 숫자 = 그 숫자만큼 점수
+ * 예: 76을 만들면 76점 획득
  */
 export function calculateScore(numbersFound: number[]): number {
-  // Each number found gives 1 point, with bonus for consecutive numbers
-  let score = numbersFound.length;
-
-  // Sort numbers for consecutive check
-  const sorted = [...numbersFound].sort((a, b) => a - b);
-
-  // Bonus for consecutive sequences
-  let consecutiveCount = 1;
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] === sorted[i - 1] + 1) {
-      consecutiveCount++;
-    } else {
-      if (consecutiveCount >= 3) {
-        score += Math.floor(consecutiveCount / 3); // Bonus point for every 3 consecutive
-      }
-      consecutiveCount = 1;
-    }
-  }
-
-  if (consecutiveCount >= 3) {
-    score += Math.floor(consecutiveCount / 3);
-  }
-
-  return score;
+  // 각 숫자가 그 숫자만큼의 점수를 제공
+  return numbersFound.reduce((total, num) => total + num, 0);
 }
 
 /**
- * Generate example expressions using ALL 4 numbers
+ * Generate example expressions using ALL 4 numbers (1~100 범위)
  */
 export function generateExampleExpressions(targetNumbers: number[]): string[] {
   const [a, b, c, d] = targetNumbers;
@@ -339,37 +319,42 @@ export function generateExampleExpressions(targetNumbers: number[]): string[] {
 
   // Examples using all 4 numbers with basic operations
   const sum = a + b + c + d;
-  if (sum <= 100) examples.push(`${a} + ${b} + ${c} + ${d} = ${sum}`);
+  if (sum >= 1 && sum <= 100) examples.push(`${a} + ${b} + ${c} + ${d} = ${sum}`);
 
   // Multiplication examples
   const product = a * b * c * d;
-  if (product <= 100) examples.push(`${a} × ${b} × ${c} × ${d} = ${product}`);
+  if (product >= 1 && product <= 100) examples.push(`${a} × ${b} × ${c} × ${d} = ${product}`);
 
   // Mixed operations
   const mixed1 = a + b * c - d;
   if (mixed1 >= 1 && mixed1 <= 100) examples.push(`${a} + ${b} × ${c} - ${d} = ${mixed1}`);
 
   const mixed2 = a * b + c + d;
-  if (mixed2 <= 100) examples.push(`${a} × ${b} + ${c} + ${d} = ${mixed2}`);
+  if (mixed2 >= 1 && mixed2 <= 100) examples.push(`${a} × ${b} + ${c} + ${d} = ${mixed2}`);
 
   // Examples with parentheses
   const paren1 = (a + b) * (c + d);
-  if (paren1 <= 100) examples.push(`(${a} + ${b}) × (${c} + ${d}) = ${paren1}`);
+  if (paren1 >= 1 && paren1 <= 100) examples.push(`(${a} + ${b}) × (${c} + ${d}) = ${paren1}`);
 
   const paren2 = a * (b + c) - d;
   if (paren2 >= 1 && paren2 <= 100) examples.push(`${a} × (${b} + ${c}) - ${d} = ${paren2}`);
 
   // Examples with exponents (if numbers are small)
   if (a <= 3 && b <= 3 && c <= 3 && d <= 3) {
-    const exp1 = a^b + c + d;
-    if (exp1 <= 100) examples.push(`${a}^${b} + ${c} + ${d} = ${exp1}`);
+    const exp1 = Math.pow(a, b) + c + d;
+    if (exp1 >= 1 && exp1 <= 100) examples.push(`${a}^${b} + ${c} + ${d} = ${exp1}`);
   }
 
-  // Examples with permutations/combinations (if applicable)
-  if (a >= 2 && b >= 2 && c <= 5 && d <= 5) {
-    const perm = Math.floor(a * b + c + d);
-    if (perm <= 100) examples.push(`${a} × ${b} + ${c} + ${d} = ${perm} (using all numbers)`);
-  }
+  // Examples with subtraction
+  const sub1 = a * b * c - d;
+  if (sub1 >= 1 && sub1 <= 100) examples.push(`${a} × ${b} × ${c} - ${d} = ${sub1}`);
 
-  return examples.slice(0, 6); // Return up to 6 examples
+  // More complex examples for higher numbers
+  const complex1 = a * b + c * d;
+  if (complex1 >= 1 && complex1 <= 100) examples.push(`${a} × ${b} + ${c} × ${d} = ${complex1}`);
+
+  const complex2 = (a + b) * c + d;
+  if (complex2 >= 1 && complex2 <= 100) examples.push(`(${a} + ${b}) × ${c} + ${d} = ${complex2}`);
+
+  return examples.slice(0, 8); // Return up to 8 examples
 }

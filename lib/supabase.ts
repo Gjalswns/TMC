@@ -1,71 +1,117 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-// Get environment variables with fallbacks for development
+// 환경 변수 가져오기
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 
-// Check if environment variables are properly configured
-if (!supabaseUrl) {
-  console.error("Missing NEXT_PUBLIC_SUPABASE_URL environment variable");
+// 환경 변수 확인
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn(
+    "⚠️ Supabase 환경 변수가 설정되지 않았습니다. ",
+    "NEXT_PUBLIC_SUPABASE_URL과 NEXT_PUBLIC_SUPABASE_ANON_KEY를 확인해주세요."
+  );
 }
 
-if (!supabaseAnonKey) {
-  console.error("Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable");
-}
-
-// Create a mock client if environment variables are missing (for development)
-const createMockClient = () => ({
-  from: () => ({
-    select: () => Promise.resolve({ data: [], error: null }),
-    insert: () =>
-      Promise.resolve({
-        data: null,
-        error: { message: "Supabase not configured" },
-      }),
-    update: () =>
-      Promise.resolve({
-        data: null,
-        error: { message: "Supabase not configured" },
-      }),
-    delete: () =>
-      Promise.resolve({
-        data: null,
-        error: { message: "Supabase not configured" },
-      }),
-    eq: () => ({
-      select: () => Promise.resolve({ data: [], error: null }),
-      single: () =>
-        Promise.resolve({
-          data: null,
-          error: { message: "Supabase not configured" },
+// 개발용 모의 클라이언트 생성
+const createMockClient = (): SupabaseClient => {
+  console.warn("⚠️ Supabase 모의 클라이언트가 사용 중입니다. 환경 변수를 설정해주세요.");
+  
+  const mockError = { 
+    message: "Supabase가 제대로 설정되지 않았습니다. 환경 변수를 확인해주세요." 
+  };
+  
+  return {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          single: () => Promise.resolve({ data: null, error: mockError }),
+          order: () => Promise.resolve({ data: [], error: mockError }),
         }),
-    }),
-    order: () => Promise.resolve({ data: [], error: null }),
-    single: () =>
-      Promise.resolve({
-        data: null,
-        error: { message: "Supabase not configured" },
+        order: () => Promise.resolve({ data: [], error: mockError }),
+        single: () => Promise.resolve({ data: null, error: mockError }),
       }),
-  }),
-  channel: () => ({
-    on: () => ({
-      on: () => ({ subscribe: () => {}, removeChannel: () => {} }),
+      insert: () => ({
+        select: () => ({
+          single: () => Promise.resolve({ data: null, error: mockError }),
+        }),
+      }),
+      update: () => ({
+        eq: () => Promise.resolve({ data: null, error: mockError }),
+      }),
+      delete: () => ({
+        eq: () => Promise.resolve({ data: null, error: mockError }),
+      }),
+      eq: () => ({
+        select: () => ({
+          single: () => Promise.resolve({ data: null, error: mockError }),
+          order: () => Promise.resolve({ data: [], error: mockError }),
+        }),
+        single: () => Promise.resolve({ data: null, error: mockError }),
+        update: () => Promise.resolve({ data: null, error: mockError }),
+        delete: () => Promise.resolve({ data: null, error: mockError }),
+      }),
+      order: () => Promise.resolve({ data: [], error: mockError }),
+      single: () => Promise.resolve({ data: null, error: mockError }),
     }),
-    subscribe: () => {},
-  }),
-  removeChannel: () => {},
-});
+    channel: () => ({
+      on: () => ({
+        on: () => ({
+          on: () => ({ subscribe: () => ({ unsubscribe: () => {} }) }),
+          subscribe: () => ({ unsubscribe: () => {} }),
+        }),
+        subscribe: () => ({ unsubscribe: () => {} }),
+      }),
+      subscribe: () => ({ unsubscribe: () => {} }),
+    }),
+    removeChannel: () => {},
+    rpc: () => Promise.resolve({ data: null, error: mockError }),
+  } as unknown as SupabaseClient;
+};
 
-// Create Supabase client with proper configuration
-export const supabase = supabaseUrl && supabaseAnonKey
-  ? createClient<Database>(supabaseUrl, supabaseAnonKey, {
-      realtime: {
-        params: {
-          eventsPerSecond: 10,
-        },
+// 싱글톤 패턴을 사용한 Supabase 클라이언트 생성
+let supabaseInstance: SupabaseClient | null = null;
+
+/**
+ * Supabase 클라이언트를 생성하거나 기존 인스턴스를 반환합니다.
+ * 환경 변수가 설정되지 않은 경우 모의 클라이언트를 반환합니다.
+ */
+function getSupabaseClient(): SupabaseClient {
+  if (supabaseInstance) {
+    return supabaseInstance;
+  }
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    supabaseInstance = createMockClient();
+    return supabaseInstance;
+  }
+
+  supabaseInstance = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+    realtime: {
+      params: {
+        eventsPerSecond: 10,
       },
-    })
-  : (createMockClient() as any);
+    },
+    global: {
+      headers: {
+        'x-client-info': 'tmc-game@1.0.0',
+      },
+    },
+  });
+
+  return supabaseInstance;
+}
+
+// Supabase 클라이언트 내보내기
+export const supabase = getSupabaseClient();
+
+// Supabase가 제대로 설정되었는지 확인하는 헬퍼 함수
+export const isSupabaseConfigured = (): boolean => {
+  return !!(supabaseUrl && supabaseAnonKey);
+};
 
 export type Database = {
   public: {

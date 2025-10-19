@@ -2,12 +2,11 @@ import { supabase } from "@/lib/supabase"
 import { CreateGameForm } from "@/components/create-game-form"
 import { GamesList } from "@/components/games-list"
 import { SupabaseConfigWarning } from "@/components/supabase-config-warning"
-import { CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft, GraduationCap } from "lucide-react"
 import Link from "next/link"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { InteractiveCard } from "@/components/interactive-card"
 
 export default async function AdminPage() {
   // Try to fetch games, but handle the case where Supabase isn't configured
@@ -33,19 +32,19 @@ export default async function AdminPage() {
       </div>
 
       {/* Header with back button */}
-      <div className="flex items-center justify-between fade-in">
+      <div className="flex items-center justify-between">
         <div className="text-center flex-1">
           <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 bg-gradient-to-br from-primary to-secondary rounded-full flex items-center justify-center float-animation">
+            <div className="w-12 h-12 bg-primary rounded-full flex items-center justify-center">
               <GraduationCap className="h-6 w-6 text-primary-foreground" />
             </div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+            <h1 className="text-3xl font-bold text-primary">
               Teacher Dashboard
             </h1>
           </div>
           <p className="text-muted-foreground">Create and manage classroom games</p>
         </div>
-        <Button asChild variant="outline" size="sm" className="interactive-hover bg-transparent">
+        <Button asChild variant="outline" size="sm">
           <Link href="/join">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Join
@@ -54,13 +53,13 @@ export default async function AdminPage() {
       </div>
 
       {hasSupabaseError && (
-        <div className="slide-up">
+        <div>
           <SupabaseConfigWarning />
         </div>
       )}
 
-      <div className="grid gap-8 md:grid-cols-3 slide-up">
-        <InteractiveCard hoverScale glowEffect>
+      <div className="grid gap-6 md:grid-cols-3">
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <div className="w-8 h-8 bg-primary/20 rounded-lg flex items-center justify-center">
@@ -77,9 +76,9 @@ export default async function AdminPage() {
               <div className="text-center text-muted-foreground py-8">Configure Supabase to create games</div>
             )}
           </CardContent>
-        </InteractiveCard>
+        </Card>
 
-        <InteractiveCard hoverScale>
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <div className="w-8 h-8 bg-secondary/20 rounded-lg flex items-center justify-center">
@@ -96,9 +95,9 @@ export default async function AdminPage() {
               <div className="text-center text-muted-foreground py-8">Configure Supabase to view games</div>
             )}
           </CardContent>
-        </InteractiveCard>
+        </Card>
 
-        <InteractiveCard hoverScale>
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <div className="w-8 h-8 bg-accent/20 rounded-lg flex items-center justify-center">
@@ -120,11 +119,11 @@ export default async function AdminPage() {
               </Button>
             </div>
           </CardContent>
-        </InteractiveCard>
+        </Card>
       </div>
 
       {/* Quick Access Instructions */}
-      <InteractiveCard className="glass-effect">
+      <Card>
         <CardContent className="p-4">
           <div className="text-center space-y-2">
             <h3 className="font-medium text-primary">💡 Quick Access Tip</h3>
@@ -134,7 +133,7 @@ export default async function AdminPage() {
             </p>
           </div>
         </CardContent>
-      </InteractiveCard>
+      </Card>
     </div>
   )
 }
