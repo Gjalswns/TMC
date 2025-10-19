@@ -313,7 +313,7 @@ export function YearGameView({
                 <Input
                   type="number"
                   min="1"
-                  max="50"
+                  max="99"
                   value={targetNumber}
                   onChange={(e) =>
                     setTargetNumber(parseInt(e.target.value) || 1)
@@ -353,16 +353,16 @@ export function YearGameView({
                 Team Progress
               </CardTitle>
               <CardDescription>
-                Numbers found: {teamResult.total_found}/50 • Score:{" "}
+                Numbers found: {teamResult.total_found}/99 • Score:{" "}
                 {teamResult.score}
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-10 gap-1 mb-4">
-                {Array.from({ length: 50 }, (_, i) => i + 1).map((num) => (
+              <div className="grid grid-cols-11 gap-1 mb-4">
+                {Array.from({ length: 99 }, (_, i) => i + 1).map((num) => (
                   <div
                     key={num}
-                    className={`w-8 h-8 rounded text-xs flex items-center justify-center font-medium ${
+                    className={`w-7 h-7 rounded text-xs flex items-center justify-center font-medium ${
                       teamResult.numbers_found.includes(num)
                         ? "bg-green-500 text-white"
                         : "bg-gray-200 text-gray-600"

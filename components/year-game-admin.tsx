@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Card,
   CardContent,
@@ -87,13 +87,29 @@ export function YearGameAdmin({
         `🔍 Loading Year Game session for game ${gameId}, round ${currentRound}`
       );
 
-      // Check if there's already an active session
+      // Check if there's already a session (any status)
       const { data: existingSession } = await supabase
         .from("year_game_sessions")
-        .select("*")
+        .select(`
+          *,
+          year_game_results (
+            id,
+            team_id,
+            numbers_found,
+            total_found,
+            score,
+            teams (
+              id,
+              team_name,
+              team_number,
+              score
+            )
+          )
+        `)
         .eq("game_id", gameId)
         .eq("round_number", currentRound)
-        .eq("status", "waiting")
+        .order("created_at", { ascending: false })
+        .limit(1)
         .single();
 
       if (existingSession) {
@@ -183,7 +199,29 @@ export function YearGameAdmin({
         await supabase.from("year_game_results").insert(results);
       }
 
-      setSession(session);
+      // Reload session with results
+      const { data: sessionWithResults } = await supabase
+        .from("year_game_sessions")
+        .select(`
+          *,
+          year_game_results (
+            id,
+            team_id,
+            numbers_found,
+            total_found,
+            score,
+            teams (
+              id,
+              team_name,
+              team_number,
+              score
+            )
+          )
+        `)
+        .eq("id", session.id)
+        .single();
+
+      setSession(sessionWithResults || session);
       toast({
         title: "Session Created",
         description: `Year Game session created with numbers: ${numbersToUse.join(
@@ -296,16 +334,37 @@ export function YearGameAdmin({
   const handleResultsUpdate = useCallback(
     (updatedResult: any) => {
       console.log("📊 Year Game result updated via websocket:", updatedResult);
-      if (session?.year_game_results) {
-        const updatedResults = session.year_game_results.map((result) =>
-          result.id === updatedResult.id ? updatedResult : result
+      setSession((prev) => {
+        if (!prev || !prev.year_game_results) {
+          console.log("⚠️ No session or results to update");
+          return prev;
+        }
+
+        // Find and update the specific result
+        const existingIndex = prev.year_game_results.findIndex(
+          (result) => result.id === updatedResult.id
         );
-        setSession((prev) =>
-          prev ? { ...prev, year_game_results: updatedResults } : null
-        );
-      }
+
+        if (existingIndex !== -1) {
+          // Update existing result
+          const updatedResults = [...prev.year_game_results];
+          updatedResults[existingIndex] = {
+            ...updatedResults[existingIndex],
+            ...updatedResult,
+          };
+          console.log("✅ Updated result at index:", existingIndex);
+          return { ...prev, year_game_results: updatedResults };
+        } else {
+          // Add new result if not found
+          console.log("➕ Adding new result to session");
+          return {
+            ...prev,
+            year_game_results: [...prev.year_game_results, updatedResult],
+          };
+        }
+      });
     },
-    [session?.year_game_results]
+    []
   );
 
   useYearGameSessionUpdates(gameId, handleSessionUpdate);
@@ -567,19 +626,19 @@ export function YearGameAdmin({
 
                     <div className="mb-2">
                       <div className="flex items-center justify-between text-sm mb-1">
-                        <span>Numbers Found: {result.total_found}/50</span>
+                        <span>Numbers Found: {result.total_found}/99</span>
                         <span>
-                          {Math.round((result.total_found / 50) * 100)}%
+                          {Math.round((result.total_found / 99) * 100)}%
                         </span>
                       </div>
                       <Progress
-                        value={(result.total_found / 50) * 100}
+                        value={(result.total_found / 99) * 100}
                         className="h-2"
                       />
                     </div>
 
-                    <div className="grid grid-cols-10 gap-1">
-                      {Array.from({ length: 50 }, (_, i) => i + 1).map(
+                    <div className="grid grid-cols-11 gap-1">
+                      {Array.from({ length: 99 }, (_, i) => i + 1).map(
                         (num) => (
                           <div
                             key={num}
@@ -620,27 +679,25 @@ export function YearGameAdmin({
         </CardHeader>
         <CardContent className="space-y-3">
           <div>
-            <h4 className="font-medium">Objective</h4>
+            <h4 className="font-medium">게임 목표</h4>
             <p className="text-sm text-muted-foreground">
-              Teams must use the 4 target numbers exactly once each to create
-              mathematical expressions that equal numbers from 1 to 50.
+              각 팀은 4개의 숫자를 정확히 한 번씩 사용하여 1부터 99까지의 숫자를 만드는 수식을 작성해야 합니다.
             </p>
           </div>
 
           <div>
-            <h4 className="font-medium">Allowed Operations</h4>
+            <h4 className="font-medium">허용되는 연산</h4>
             <p className="text-sm text-muted-foreground">
-              + (addition), - (subtraction), × (multiplication), ÷ (division), ^
-              (exponentiation), log (logarithm), ↑↑ (tetration), and
-              parentheses.
+              + (덧셈), - (뺄셈), × (곱셈), ÷ (나눗셈), ^ (거듭제곱), nPr (순열), nCr (조합), 괄호
             </p>
           </div>
 
           <div>
-            <h4 className="font-medium">Scoring</h4>
+            <h4 className="font-medium">차등 점수 시스템</h4>
             <p className="text-sm text-muted-foreground">
-              Each number found = 1 point. Bonus points for consecutive number
-              sequences.
+              • 각 숫자 발견: 1점<br/>
+              • 연속된 숫자 3개마다: +1 보너스 점수<br/>
+              예) 1,2,3,4,5,6 발견 시 = 기본 6점 + 보너스 2점 = 8점
             </p>
           </div>
         </CardContent>
