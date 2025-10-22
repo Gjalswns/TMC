@@ -108,6 +108,9 @@ function getSupabaseClient(): SupabaseClient {
 // Supabase 클라이언트 내보내기
 export const supabase = getSupabaseClient();
 
+// 클라이언트 생성 함수도 export (컴포넌트에서 사용)
+export { createClient } from "@supabase/supabase-js";
+
 // Supabase가 제대로 설정되었는지 확인하는 헬퍼 함수
 export const isSupabaseConfigured = (): boolean => {
   return !!(supabaseUrl && supabaseAnonKey);

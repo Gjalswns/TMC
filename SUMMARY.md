@@ -34,12 +34,13 @@ TMC (Team Match Challenge)는 실시간 팀 대항 퀴즈 게임 플랫폼으로
 ## 🎮 게임 구성
 
 ### Round 1: Year Game (숫자 게임)
-- **목표**: 4개 숫자로 1~50 만들기
-- **시간**: 10분
-- **점수**: 각 숫자당 100점
+- **목표**: 4개 숫자로 1~100 만들기
+- **시간**: 20분
+- **점수**: 맞춘 숫자만큼 ex) 1 정답:
 - **특징**: 수학적 사고력 테스트
 
 ### Round 2: Score Steal (점수 탈취)
+
 - **목표**: 다른 팀 점수 탈취
 - **메커니즘**: 정답 시 +점수, 오답 시 -점수
 - **특징**: 전략적 의사결정
@@ -80,6 +81,7 @@ Next.js 14 + TypeScript + Tailwind CSS + shadcn/ui
 ### Backend
 ```
 Supabase (PostgreSQL + Realtime + Edge Functions)
+
 ```
 
 ### DevOps
@@ -151,145 +153,3 @@ TMC/
 ```
 
 ---
-
-## 🚀 배포 상태
-
-### 현재 상태: ✅ **프로덕션 준비 완료**
-
-#### 완료된 항목
-- [x] 코드 개발 (100%)
-- [x] 데이터베이스 마이그레이션 (11개)
-- [x] 보안 강화 (RLS + Rate Limiting)
-- [x] 성능 최적화 (인덱스 + 쿼리)
-- [x] 문서화 (README + 가이드)
-- [x] 테스트 (수동)
-
-#### 배포 준비
-- [x] 환경 변수 설정
-- [x] Edge Functions 배포
-- [x] 데이터베이스 설정
-- [x] 도메인 설정 (옵션)
-
----
-
-## 📈 로드맵
-
-### Phase 1: 안정화 (완료 ✅)
-- [x] 기본 게임 기능
-- [x] Realtime 통신
-- [x] 동시성 문제 해결
-- [x] 성능 최적화
-
-### Phase 2: 확장 (진행 중)
-- [ ] 자동화 테스트
-- [ ] CI/CD 파이프라인
-- [ ] 모니터링 통합 (Sentry, Datadog)
-- [ ] 부하 테스트
-
-### Phase 3: 고도화 (계획)
-- [ ] 커스텀 게임 모드
-- [ ] AI 기반 문제 생성
-- [ ] 리플레이 시스템
-- [ ] 대회 모드
-
----
-
-## 💰 비용 예측
-
-### Supabase (무료 티어)
-- **Database**: 500MB (충분)
-- **Realtime**: 200 동시 연결
-- **Edge Functions**: 500K 실행/월
-- **Storage**: 1GB
-
-### Vercel (무료 티어)
-- **Bandwidth**: 100GB/월
-- **Edge Functions**: 100K 실행/월
-- **Build Minutes**: 6000분/월
-
-**예상 비용**: $0/월 (무료 티어 내)
-
----
-
-## 🔐 보안 체크리스트
-
-- [x] SQL Injection 방지
-- [x] XSS 방지 (React 기본)
-- [x] CSRF 방지 (Supabase 토큰)
-- [x] Rate Limiting (10회/분)
-- [x] 입력 검증
-- [x] RLS 정책
-- [x] 감사 로그
-- [x] 에러 메시지 sanitization
-
----
-
-## 📊 모니터링 메트릭
-
-### 핵심 지표
-1. **가용성**: 99%+ 목표
-2. **응답 시간**: < 100ms 목표
-3. **에러율**: < 1% 목표
-4. **동시 접속**: 100+ 지원
-
-### 모니터링 도구
-- Supabase Dashboard (기본)
-- Browser DevTools
-- Custom 로깅
-- (선택) Sentry, Datadog
-
----
-
-## 🤝 팀 & 역할
-
-### 개발팀
-- **Backend**: Supabase + PostgreSQL
-- **Frontend**: Next.js + React
-- **DevOps**: Vercel + GitHub
-- **Design**: Tailwind + shadcn/ui
-
-### 문서화
-- README.md (356줄)
-- SCALABILITY_IMPROVEMENTS.md (계획: 900줄)
-- DEPLOYMENT_GUIDE.md (계획: 300줄)
-- REALTIME_FIX.md (계획: 391줄)
-
----
-
-## 📞 지원 & 문의
-
-### 문서
-- 📖 [README.md](./README.md) - 시작 가이드
-- 🚀 [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) - 배포 가이드
-- 📡 [REALTIME_FIX.md](./REALTIME_FIX.md) - 실시간 통신
-- ✅ [CHECKLIST.md](./CHECKLIST.md) - 체크리스트
-
-### 연락처
-- GitHub Issues
-- Email Support
-- Community Discord
-
----
-
-## 🎉 결론
-
-TMC는 **프로덕션 준비가 완료**된 실시간 게임 플랫폼입니다. 
-
-**주요 성과**:
-- ✅ 100명+ 동시 접속 지원
-- ✅ 쿼리 속도 96% 개선
-- ✅ Race condition 완전 해결
-- ✅ 보안 강화 완료
-- ✅ 포괄적 문서화
-
-**다음 단계**:
-1. 스테이징 환경 테스트
-2. 프로덕션 배포
-3. 사용자 피드백 수집
-4. 지속적 개선
-
----
-
-**작성일**: 2025-10-18  
-**버전**: 2.0.0  
-**상태**: ✅ 프로덕션 준비 완료

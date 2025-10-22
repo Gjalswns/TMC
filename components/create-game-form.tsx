@@ -14,6 +14,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -31,14 +32,7 @@ const formSchema = z.object({
   title: z.string().min(2, {
     message: "Game title must be at least 2 characters.",
   }),
-  gameType: z.string().min(1, {
-    message: "Please select a game type.",
-  }),
-  teamCount: z.coerce.number().min(2, {
-    message: "Must have at least 2 teams.",
-  }).max(10, {
-    message: "Cannot have more than 10 teams.",
-  }),
+  usesBrackets: z.boolean().default(true),
 });
 
 export function CreateGameForm() {
@@ -50,8 +44,7 @@ export function CreateGameForm() {
     resolver: zodResolver(formSchema),
     defaultValues: {
       title: "",
-      gameType: "year-game", // Default to Year Game as per README
-      teamCount: 4, // Default to 4 teams for TMC games
+      usesBrackets: true, // Default to using brackets for TMC
     },
   });
 
@@ -128,68 +121,39 @@ export function CreateGameForm() {
             <FormItem>
               <FormLabel>Game Title</FormLabel>
               <FormControl>
-                <Input placeholder="My Awesome Game" {...field} />
+                <Input placeholder="TMC 2024" {...field} />
               </FormControl>
-              <FormDescription>This is the title of your game.</FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="gameType"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Game Type</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a game type" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectItem value="general">General Game</SelectItem>
-                  <SelectItem value="year-game">Year Game</SelectItem>
-                  <SelectItem value="score-steal">Score Steal Game</SelectItem>
-                  <SelectItem value="relay-quiz">Relay Quiz Game</SelectItem>
-                </SelectContent>
-              </Select>
               <FormDescription>
-                Choose the type of game you want to create.
+                All games consist of 3 rounds: Year Game → Score Steal → Relay Quiz
               </FormDescription>
               <FormMessage />
             </FormItem>
           )}
         />
+        
         <FormField
           control={form.control}
-          name="teamCount"
+          name="usesBrackets"
           render={({ field }) => (
-            <FormItem>
-              <FormLabel>Number of Teams</FormLabel>
-              <Select onValueChange={(value) => field.onChange(parseInt(value))} defaultValue={field.value?.toString()}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select number of teams" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectItem value="2">2 Teams</SelectItem>
-                  <SelectItem value="3">3 Teams</SelectItem>
-                  <SelectItem value="4">4 Teams (Recommended)</SelectItem>
-                  <SelectItem value="5">5 Teams</SelectItem>
-                  <SelectItem value="6">6 Teams</SelectItem>
-                  <SelectItem value="8">8 Teams</SelectItem>
-                  <SelectItem value="10">10 Teams</SelectItem>
-                </SelectContent>
-              </Select>
-              <FormDescription>
-                How many teams will participate in the game?
-              </FormDescription>
-              <FormMessage />
+            <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+              <FormControl>
+                <Checkbox
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                />
+              </FormControl>
+              <div className="space-y-1 leading-none">
+                <FormLabel>
+                  Use Higher/Lower Brackets
+                </FormLabel>
+                <FormDescription>
+                  Enable bracket system for Score Steal game (Higher vs Lower brackets)
+                </FormDescription>
+              </div>
             </FormItem>
           )}
         />
+
         <Button 
           type="submit" 
           disabled={isSubmitting}

@@ -67,36 +67,68 @@ async function broadcastGameEvent(gameId: string, eventType: string, data: any) 
 }
 import { createYearGameSession } from "./year-game-actions";
 
-function generateGameCode(): string {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
+async function generateUniqueGameCode(): Promise<string> {
+  const maxAttempts = 90; // Try all possible 2-digit codes if needed
+  const attemptedCodes = new Set<string>();
+  
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Generate 2-digit code (10-99)
+    const code = String(Math.floor(Math.random() * 90) + 10);
+    
+    // Skip if we already tried this code
+    if (attemptedCodes.has(code)) {
+      continue;
+    }
+    attemptedCodes.add(code);
+    
+    // Check if code already exists in active games
+    const { data, error } = await supabase
+      .from("games")
+      .select("id")
+      .eq("game_code", code)
+      .maybeSingle();
+    
+    if (error) {
+      console.error("Error checking game code:", error);
+      continue;
+    }
+    
+    // If code doesn't exist, use it
+    if (!data) {
+      return code;
+    }
+  }
+  
+  // If all 2-digit codes are taken, throw error
+  throw new Error("All game codes are in use. Please delete old games first.");
 }
 
 export async function createGame(
-  formData: FormData | { title: string; gameType: string; teamCount: number; maxParticipants?: number; joinDeadlineMinutes?: number }
+  formData: FormData | { title: string; teamCount?: number; maxParticipants?: number; joinDeadlineMinutes?: number; usesBrackets?: boolean }
 ) {
   let title: string;
-  let gameType: string;
+  let gameType: string = "tmc"; // All games are TMC format (3 rounds)
   let duration: number = 60; // Fixed duration of 60 minutes
-  let teamCount: number;
-  let totalRounds: number = 4; // TMC games always have 4 rounds
+  let teamCount: number = 4; // Default to 4 teams (will be created dynamically from preregistered players)
+  let totalRounds: number = 3; // TMC games always have 3 rounds (Year Game, Score Steal, Relay Quiz)
   let maxParticipants: number = 20;
   let joinDeadlineMinutes: number = 30;
+  let usesBrackets: boolean = true; // Always use brackets for TMC
 
   if (formData instanceof FormData) {
     // Legacy form data format
     title = formData.get("title") as string;
-    const gradeClass = formData.get("gradeClass") as string;
-    teamCount = Number.parseInt(formData.get("teamCount") as string);
-    gameType = "general";
+    teamCount = Number.parseInt(formData.get("teamCount") as string) || 4;
     maxParticipants = Number.parseInt(formData.get("maxParticipants") as string) || 20;
     joinDeadlineMinutes = Number.parseInt(formData.get("joinDeadlineMinutes") as string) || 30;
+    usesBrackets = formData.get("usesBrackets") === "true";
   } else {
     // New object format
     title = formData.title;
-    gameType = formData.gameType;
-    teamCount = formData.teamCount;
+    teamCount = formData.teamCount || 4; // Default to 4 teams
     maxParticipants = formData.maxParticipants || 20;
     joinDeadlineMinutes = formData.joinDeadlineMinutes || 30;
+    usesBrackets = formData.usesBrackets !== undefined ? formData.usesBrackets : true;
   }
 
   // Validate inputs
@@ -107,21 +139,14 @@ export async function createGame(
     };
   }
 
-  if (teamCount < 2 || teamCount > 10) {
+  if (maxParticipants < 2 || maxParticipants > 100) {
     return {
       success: false,
-      error: "Team count must be between 2 and 10",
+      error: "Max participants must be between 2 and 100",
     };
   }
 
-  if (maxParticipants < teamCount || maxParticipants > 100) {
-    return {
-      success: false,
-      error: "Max participants must be at least the team count and at most 100",
-    };
-  }
-
-  const gameCode = generateGameCode();
+  const gameCode = await generateUniqueGameCode();
 
   try {
     // Create the game
@@ -137,6 +162,7 @@ export async function createGame(
         total_rounds: totalRounds,
         max_participants: maxParticipants,
         join_deadline_minutes: joinDeadlineMinutes,
+        uses_brackets: usesBrackets,
         game_expires_at: new Date(Date.now() + duration * 60 * 1000).toISOString(), // Game expires after duration
       })
       .select()
@@ -144,16 +170,46 @@ export async function createGame(
 
     if (gameError) throw gameError;
 
-    // Create teams for the game
-    const teams = Array.from({ length: teamCount }, (_, i) => ({
+    // Get unique teams from preregistered players
+    const { data: preregisteredPlayers, error: playersError } = await supabase
+      .from("preregistered_players")
+      .select("team_name, bracket")
+      .eq("is_active", true);
+
+    if (playersError) throw playersError;
+
+    // Create unique teams based on preregistered players
+    const uniqueTeams = new Map<string, { team_name: string; bracket: 'higher' | 'lower' }>();
+    preregisteredPlayers?.forEach(player => {
+      if (!uniqueTeams.has(player.team_name)) {
+        uniqueTeams.set(player.team_name, {
+          team_name: player.team_name,
+          bracket: player.bracket
+        });
+      }
+    });
+
+    // Convert to array and add team numbers
+    const teams = Array.from(uniqueTeams.values()).map((team, index) => ({
       game_id: game.id,
-      team_name: `Team ${i + 1}`,
-      team_number: i + 1,
+      team_name: team.team_name,
+      team_number: index + 1,
+      bracket: team.bracket,
     }));
+
+    if (teams.length === 0) {
+      throw new Error("No teams found in preregistered players. Please add students first.");
+    }
 
     const { error: teamsError } = await supabase.from("teams").insert(teams);
 
     if (teamsError) throw teamsError;
+
+    // Update game team_count to match actual teams created
+    await supabase
+      .from("games")
+      .update({ team_count: teams.length })
+      .eq("id", game.id);
 
     revalidatePath("/admin");
     

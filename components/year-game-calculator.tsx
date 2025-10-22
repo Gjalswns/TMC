@@ -20,6 +20,16 @@ export function YearGameCalculator({ availableNumbers, onSubmit, disabled }: Cal
   // 숫자 사용 횟수 추적
   const [numberUsage, setNumberUsage] = useState<Record<number, number>>({});
 
+  // 게임이 비활성화되면 입력창 초기화
+  useEffect(() => {
+    if (disabled) {
+      setExpression("");
+      setResult(null);
+      setError(null);
+      setNumberUsage({});
+    }
+  }, [disabled]);
+
   // 표현식 평가
   useEffect(() => {
     if (!expression) {
@@ -154,7 +164,7 @@ export function YearGameCalculator({ availableNumbers, onSubmit, disabled }: Cal
     const noExtraNumbers = Object.values(numberUsage).every(count => count <= 1);
 
     if (!allNumbersUsed) {
-      setError("You must use all 4 numbers exactly once");
+      setError("You must use all 5 numbers exactly once");
       return;
     }
 
@@ -339,18 +349,7 @@ export function YearGameCalculator({ availableNumbers, onSubmit, disabled }: Cal
           )
         </Button>
 
-        {/* 백스페이스 */}
-        <Button
-          variant="outline"
-          size="lg"
-          className="h-16 hover:bg-destructive/10"
-          onClick={handleBackspace}
-          disabled={disabled}
-        >
-          <ArrowLeft className="h-6 w-6" />
-        </Button>
-
-        {/* 클리어 */}
+        {/* 전체 지우기 (Clear All) */}
         <Button
           variant="outline"
           size="lg"
@@ -359,6 +358,17 @@ export function YearGameCalculator({ availableNumbers, onSubmit, disabled }: Cal
           disabled={disabled}
         >
           <Delete className="h-6 w-6" />
+        </Button>
+
+        {/* 마지막 1개 지우기 (Backspace) */}
+        <Button
+          variant="outline"
+          size="lg"
+          className="h-16 hover:bg-destructive/10"
+          onClick={handleBackspace}
+          disabled={disabled}
+        >
+          <ArrowLeft className="h-6 w-6" />
         </Button>
 
         {/* 제출 버튼 (전체 너비) */}
@@ -380,7 +390,7 @@ export function YearGameCalculator({ availableNumbers, onSubmit, disabled }: Cal
         <CardContent className="p-4">
           <div className="text-xs space-y-1">
             <p className="font-semibold">💡 Tips:</p>
-            <p>• Use all 4 numbers exactly once</p>
+            <p>• Use all 5 numbers exactly once</p>
             <p>• Operations: + − × ÷ ^ ! P C ( )</p>
             <p>• Target: Any integer from 1 to 100</p>
             <p className="font-mono">• Example: (7+2)×1+9 = 18</p>

@@ -18,7 +18,7 @@ export default async function YearGamePage({
   // Await params and searchParams in Next.js 15
   const { id } = await params;
   const resolvedSearchParams = await searchParams;
-  
+
   const { data: game } = await supabase
     .from("games")
     .select("*")
@@ -37,10 +37,10 @@ export default async function YearGamePage({
 
   const participantPromise = resolvedSearchParams.participant
     ? supabase
-        .from("participants")
-        .select("*")
-        .eq("id", resolvedSearchParams.participant)
-        .single()
+      .from("participants")
+      .select("*")
+      .eq("id", resolvedSearchParams.participant)
+      .single()
     : Promise.resolve({ data: null, error: null });
 
   const [{ data: teams }, { data: participant }] = await Promise.all([

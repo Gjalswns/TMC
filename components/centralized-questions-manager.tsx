@@ -39,19 +39,12 @@ interface CentralQuestion {
   title: string;
   question_image_url: string;
   correct_answer: string;
-  difficulty: 'easy' | 'medium' | 'hard';
   points: number;
   order_index: number;
   is_active: boolean;
   created_at: string;
   category_name?: string;
 }
-
-const DIFFICULTY_COLORS = {
-  easy: 'bg-green-100 text-green-800',
-  medium: 'bg-yellow-100 text-yellow-800',
-  hard: 'bg-red-100 text-red-800'
-};
 
 const CATEGORY_INFO = {
   score_steal: { name: '점수 뺏기', color: 'bg-blue-100 text-blue-800', description: '동시 출제되는 문제들' },
@@ -79,15 +72,13 @@ export function CentralizedQuestionsManager() {
     title: string;
     question_image_url: string;
     correct_answer: string;
-    difficulty: 'easy' | 'medium' | 'hard';
     points: number;
     order_index: number;
   }>({
     title: '',
     question_image_url: '',
     correct_answer: '',
-    difficulty: 'medium',
-    points: 10,
+    points: 300,
     order_index: 1
   });
 
@@ -181,12 +172,31 @@ export function CentralizedQuestionsManager() {
     try {
       setUploading(true);
 
-      // 임시로 placeholder URL 생성 (실제로는 Supabase Storage 사용)
-      const imageUrl = `https://via.placeholder.com/400x300/4F46E5/FFFFFF?text=${encodeURIComponent(file.name.substring(0, 20))}`;
+      // 파일 이름을 고유하게 만들기 (타임스탬프 + 랜덤 문자열)
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const filePath = `question-images/${fileName}`;
+
+      // Supabase Storage에 업로드
+      const { data, error } = await supabase.storage
+        .from('game-assets')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      // Public URL 가져오기
+      const { data: { publicUrl } } = supabase.storage
+        .from('game-assets')
+        .getPublicUrl(filePath);
 
       setNewQuestion(prev => ({
         ...prev,
-        question_image_url: imageUrl
+        question_image_url: publicUrl
       }));
 
       toast({
@@ -197,7 +207,7 @@ export function CentralizedQuestionsManager() {
       console.error('이미지 업로드 실패:', error);
       toast({
         title: "업로드 실패",
-        description: "이미지 업로드에 실패했습니다.",
+        description: error instanceof Error ? error.message : "이미지 업로드에 실패했습니다.",
         variant: "destructive"
       });
     } finally {
@@ -233,7 +243,7 @@ export function CentralizedQuestionsManager() {
           title: newQuestion.title,
           question_image_url: newQuestion.question_image_url,
           correct_answer: newQuestion.correct_answer,
-          difficulty: newQuestion.difficulty,
+          difficulty: 'medium',
           points: newQuestion.points,
           order_index: newQuestion.order_index,
           is_active: true
@@ -258,8 +268,7 @@ export function CentralizedQuestionsManager() {
         title: '',
         question_image_url: '',
         correct_answer: '',
-        difficulty: 'medium',
-        points: 10,
+        points: 300,
         order_index: 1
       });
 
@@ -296,7 +305,7 @@ export function CentralizedQuestionsManager() {
           title: editingQuestion.title,
           question_image_url: editingQuestion.question_image_url,
           correct_answer: editingQuestion.correct_answer,
-          difficulty: editingQuestion.difficulty,
+          difficulty: 'medium',
           points: editingQuestion.points,
           order_index: editingQuestion.order_index
         })
@@ -500,7 +509,11 @@ export function CentralizedQuestionsManager() {
                           <img
                             src={newQuestion.question_image_url}
                             alt="문제 이미지 미리보기"
-                            className="w-full h-32 object-cover rounded border"
+                            className="w-full max-h-64 object-contain rounded-lg border-2 border-border bg-muted/30"
+                            onError={(e) => {
+                              console.error('이미지 로드 실패:', newQuestion.question_image_url);
+                              e.currentTarget.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Crect fill="%23ddd" width="400" height="300"/%3E%3Ctext fill="%23999" x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E이미지 로드 실패%3C/text%3E%3C/svg%3E';
+                            }}
                           />
                           <Button
                             type="button"
@@ -527,38 +540,25 @@ export function CentralizedQuestionsManager() {
                     />
                   </div>
 
-                  {/* 난이도 및 점수 */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label>난이도</Label>
-                      <Select
-                        value={newQuestion.difficulty}
-                        onValueChange={(value: 'easy' | 'medium' | 'hard') =>
-                          setNewQuestion(prev => ({ ...prev, difficulty: value }))
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="easy">쉬움 (10점)</SelectItem>
-                          <SelectItem value="medium">보통 (20점)</SelectItem>
-                          <SelectItem value="hard">어려움 (30점)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div>
-                      <Label htmlFor="points">점수</Label>
+                  {/* 배점 설정 */}
+                  <div>
+                    <Label htmlFor="points">배점</Label>
+                    <div className="flex items-center gap-2 mt-1">
                       <Input
                         id="points"
                         type="number"
-                        value={newQuestion.points}
-                        onChange={(e) => setNewQuestion(prev => ({ ...prev, points: parseInt(e.target.value) || 10 }))}
                         min="1"
-                        max="100"
+                        max="1000"
+                        value={newQuestion.points}
+                        onChange={(e) => setNewQuestion(prev => ({ ...prev, points: parseInt(e.target.value) || 0 }))}
+                        placeholder="배점을 입력하세요"
+                        className="w-32"
                       />
+                      <span className="text-sm text-muted-foreground">점</span>
                     </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      1점부터 1000점까지 설정 가능합니다.
+                    </p>
                   </div>
 
                   {/* 릴레이 퀴즈의 경우 순서 */}
@@ -606,10 +606,7 @@ export function CentralizedQuestionsManager() {
                 <div className="flex-1">
                   <CardTitle className="text-lg">{question.title}</CardTitle>
                   <div className="flex items-center gap-2 mt-1">
-                    <Badge className={DIFFICULTY_COLORS[question.difficulty]}>
-                      {question.difficulty}
-                    </Badge>
-                    <Badge variant="outline">{question.points}점</Badge>
+                    <Badge variant="secondary">{question.points}점</Badge>
                     {selectedCategory.startsWith('relay_') && (
                       <Badge variant="secondary">{question.order_index}번째</Badge>
                     )}
@@ -768,38 +765,25 @@ export function CentralizedQuestionsManager() {
                 />
               </div>
 
-              {/* 난이도 및 점수 */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>난이도</Label>
-                  <Select
-                    value={editingQuestion.difficulty}
-                    onValueChange={(value: 'easy' | 'medium' | 'hard') =>
-                      setEditingQuestion(prev => prev ? { ...prev, difficulty: value } : null)
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="easy">쉬움</SelectItem>
-                      <SelectItem value="medium">보통</SelectItem>
-                      <SelectItem value="hard">어려움</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label htmlFor="edit-points">점수</Label>
+              {/* 배점 설정 */}
+              <div>
+                <Label htmlFor="edit-points">배점</Label>
+                <div className="flex items-center gap-2 mt-1">
                   <Input
                     id="edit-points"
                     type="number"
-                    value={editingQuestion.points}
-                    onChange={(e) => setEditingQuestion(prev => prev ? { ...prev, points: parseInt(e.target.value) || 10 } : null)}
                     min="1"
-                    max="100"
+                    max="1000"
+                    value={editingQuestion.points}
+                    onChange={(e) => setEditingQuestion(prev => prev ? { ...prev, points: parseInt(e.target.value) || 0 } : null)}
+                    placeholder="배점을 입력하세요"
+                    className="w-32"
                   />
+                  <span className="text-sm text-muted-foreground">점</span>
                 </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  1점부터 1000점까지 설정 가능합니다.
+                </p>
               </div>
 
               {/* 릴레이 퀴즈의 경우 순서 */}

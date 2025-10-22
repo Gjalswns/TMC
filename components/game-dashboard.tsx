@@ -22,7 +22,6 @@ import {
   startGame,
   updateScore,
   nextRound,
-  updateTimeout,
 } from "@/lib/game-actions";
 import { TeamAssignment } from "./team-assignment";
 import { Scoreboard } from "./scoreboard";
@@ -39,7 +38,6 @@ import {
   ArrowLeft,
   Copy,
   Check,
-  Timer,
 } from "lucide-react";
 import Link from "next/link";
 import { Input } from "./ui/input";
@@ -68,9 +66,6 @@ export function GameDashboard({
   const [participants, setParticipants] = useState(initialParticipants);
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [round1Timeout, setRound1Timeout] = useState(
-    game.round1_timeout_seconds || 60
-  );
   const [roundQuestions, setRoundQuestions] = useState<{
     [key: number]: { scoreSteal: number; relayQuiz: number };
   }>({});
@@ -89,8 +84,8 @@ export function GameDashboard({
       [key: number]: { scoreSteal: number; relayQuiz: number };
     } = {};
 
-    // Load questions for rounds 2-4
-    for (let round = 2; round <= 4; round++) {
+    // Load questions for rounds 2-3
+    for (let round = 2; round <= 3; round++) {
       const [scoreStealResult, relayQuizResult] = await Promise.all([
         getScoreStealQuestions(game.id, round),
         getRelayQuizQuestions(game.id, round),
@@ -236,17 +231,6 @@ export function GameDashboard({
     setIsLoading(false);
   };
 
-  const handleUpdateTimeout = async () => {
-    setIsLoading(true);
-    const result = await updateTimeout(game.id, round1Timeout);
-    if (!result.success) {
-      alert(result.error);
-    } else {
-      alert("Timeout updated successfully!");
-    }
-    setIsLoading(false);
-  };
-
   const unassignedParticipants = participants.filter((p) => !p.team_id);
   const assignedParticipants = participants.filter((p) => p.team_id);
 
@@ -265,6 +249,12 @@ export function GameDashboard({
             <h1 className="text-3xl font-bold">{game.title}</h1>
             <p className="text-muted-foreground">{game.grade_class}</p>
           </div>
+          <Button asChild variant="default" size="sm">
+            <Link href={`/display/${game.id}`} target="_blank">
+              <ExternalLink className="mr-2 h-4 w-4" />
+              점수판 열기
+            </Link>
+          </Button>
         </div>
         <div className="flex items-center gap-4">
           <Badge
@@ -388,13 +378,12 @@ export function GameDashboard({
               </p>
             </div>
 
-            {/* Rounds 3-4 - Relay Quiz */}
+            {/* Round 3 - Relay Quiz */}
             <div className="p-4 border rounded-lg">
               <div className="flex items-center justify-between mb-2">
-                <h4 className="font-medium">Rounds 3-4 - Relay Quiz</h4>
+                <h4 className="font-medium">Round 3 - Relay Quiz</h4>
                 <Badge variant="outline">
-                  {roundQuestions[3]?.relayQuiz || 0} +{" "}
-                  {roundQuestions[4]?.relayQuiz || 0} questions
+                  {roundQuestions[3]?.relayQuiz || 0} questions
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground">
@@ -406,62 +395,7 @@ export function GameDashboard({
       </Card>
 
       {game.status === "waiting" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Round 1 Timeout</CardTitle>
-            <CardDescription>
-              Set the time limit for the first round in seconds.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center gap-4">
-            <Timer className="h-5 w-5 text-muted-foreground" />
-            <Input
-              type="number"
-              value={round1Timeout}
-              onChange={(e) => setRound1Timeout(parseInt(e.target.value, 10))}
-              className="max-w-xs"
-              disabled={game.status !== "waiting"}
-            />
-            <Button
-              onClick={handleUpdateTimeout}
-              disabled={isLoading || game.status !== "waiting"}
-            >
-              {isLoading ? "Saving..." : "Save"}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {game.status === "waiting" && (
         <div className="grid gap-6 lg:grid-cols-1">
-          {/* Student Access Info (QR 코드 제거) */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Student Access</CardTitle>
-              <CardDescription>
-                Students can join using the game code
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="text-center space-y-2">
-                <p className="font-mono text-3xl font-bold">{game.game_code}</p>
-                <p className="text-sm text-muted-foreground">
-                  Students visit your site and enter this code
-                </p>
-                <Button
-                  variant="outline"
-                  asChild
-                  className="w-full bg-transparent"
-                >
-                  <a href={gameUrl} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="mr-2 h-4 w-4" />
-                    Test Join Page
-                  </a>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
           {/* Team Assignment */}
           <TeamAssignment
             teams={teams}
@@ -519,8 +453,8 @@ export function GameDashboard({
             />
           )}
 
-          {/* Rounds 3-4: Relay Quiz Game */}
-          {(game.current_round === 3 || game.current_round === 4) && (
+          {/* Round 3: Relay Quiz Game */}
+          {game.current_round === 3 && (
             <RelayQuizAdmin
               gameId={game.id}
               currentRound={game.current_round}
@@ -533,7 +467,7 @@ export function GameDashboard({
           )}
 
           {/* Next Round Button */}
-          {game.current_round < (game.total_rounds || 4) && (
+          {game.current_round < (game.total_rounds || 3) && (
             <div className="flex justify-center">
               <Button onClick={handleNextRound} disabled={isLoading} size="lg">
                 {isLoading

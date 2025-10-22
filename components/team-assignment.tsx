@@ -1,16 +1,25 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import type { Database } from "@/lib/supabase"
+import { supabase } from "@/lib/supabase"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { assignTeams } from "@/lib/game-actions"
-import { Users, Shuffle, X } from "lucide-react"
+import { Users } from "lucide-react"
 
 type Team = Database["public"]["Tables"]["teams"]["Row"]
-type Participant = Database["public"]["Tables"]["participants"]["Row"]
+type Participant = Database["public"]["Tables"]["participants"]["Row"] & {
+  preregistered_player_id?: string | null
+}
+
+type PreregisteredPlayer = {
+  id: string
+  player_name: string
+  player_number: number | null
+  team_name: string
+  bracket: 'higher' | 'lower'
+  is_active: boolean
+}
 
 interface TeamAssignmentProps {
   teams: Team[]
@@ -19,224 +28,107 @@ interface TeamAssignmentProps {
   onAssignmentChange: (participants: Participant[]) => void
 }
 
-export function TeamAssignment({ teams, participants, gameId, onAssignmentChange }: TeamAssignmentProps) {
-  const [isLoading, setIsLoading] = useState(false)
-  const [assignments, setAssignments] = useState<Record<string, string>>({})
+export function TeamAssignment({ teams, participants }: TeamAssignmentProps) {
+  const [allPlayers, setAllPlayers] = useState<PreregisteredPlayer[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const unassignedParticipants = participants.filter((p) => !p.team_id)
-  const assignedParticipants = participants.filter((p) => p.team_id)
+  // Load all preregistered players
+  useEffect(() => {
+    const loadAllPlayers = async () => {
+      setLoading(true)
+      try {
+        const { data, error } = await supabase
+          .from("preregistered_players")
+          .select("*")
+          .eq("is_active", true)
+          .order("team_name")
+          .order("player_number")
 
-  const handleAutoAssign = async () => {
-    setIsLoading(true)
-    try {
-      const shuffled = [...unassignedParticipants].sort(() => Math.random() - 0.5)
-      const newAssignments: { participantId: string; teamId: string }[] = []
-
-      shuffled.forEach((participant, index) => {
-        const teamIndex = index % teams.length
-        newAssignments.push({
-          participantId: participant.id,
-          teamId: teams[teamIndex].id,
-        })
-      })
-
-      const result = await assignTeams(gameId, newAssignments)
-      if (result.success) {
-        // Update local state
-        const updatedParticipants = participants.map((p) => {
-          const assignment = newAssignments.find((a) => a.participantId === p.id)
-          return assignment ? { ...p, team_id: assignment.teamId } : p
-        })
-        onAssignmentChange(updatedParticipants)
-      } else {
-        alert(result.error)
+        if (!error && data) {
+          setAllPlayers(data)
+        }
+      } catch (error) {
+        console.error("Failed to load players:", error)
+      } finally {
+        setLoading(false)
       }
-    } catch (error) {
-      alert("Failed to assign teams")
-    } finally {
-      setIsLoading(false)
     }
-  }
 
-  const handleManualAssign = async () => {
-    setIsLoading(true)
-    try {
-      const newAssignments = Object.entries(assignments).map(([participantId, teamId]) => ({
-        participantId,
-        teamId,
-      }))
+    loadAllPlayers()
+  }, [])
 
-      const result = await assignTeams(gameId, newAssignments)
-      if (result.success) {
-        // Update local state
-        const updatedParticipants = participants.map((p) => {
-          const assignment = newAssignments.find((a) => a.participantId === p.id)
-          return assignment ? { ...p, team_id: assignment.teamId } : p
-        })
-        onAssignmentChange(updatedParticipants)
-        setAssignments({})
-      } else {
-        alert(result.error)
-      }
-    } catch (error) {
-      alert("Failed to assign teams")
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const getTeamParticipants = (teamId: string) => {
-    return assignedParticipants.filter((p) => p.team_id === teamId)
-  }
-
-  // Handle team change for assigned participant
-  const handleTeamChange = async (participantId: string, newTeamId: string) => {
-    setIsLoading(true)
-    try {
-      const result = await assignTeams(gameId, [{ participantId, teamId: newTeamId }])
-      if (result.success) {
-        const updatedParticipants = participants.map((p) =>
-          p.id === participantId ? { ...p, team_id: newTeamId } : p
-        )
-        onAssignmentChange(updatedParticipants)
-      } else {
-        alert(result.error)
-      }
-    } catch (error) {
-      alert("Failed to change team")
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  // Handle removing participant from team
-  const handleRemoveFromTeam = async (participantId: string) => {
-    setIsLoading(true)
-    try {
-      const result = await assignTeams(gameId, [{ participantId, teamId: null as any }])
-      if (result.success) {
-        const updatedParticipants = participants.map((p) =>
-          p.id === participantId ? { ...p, team_id: null } : p
-        )
-        onAssignmentChange(updatedParticipants)
-      } else {
-        alert(result.error)
-      }
-    } catch (error) {
-      alert("Failed to remove from team")
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  // Group players by team
+  const playersByTeam = teams.map(team => ({
+    team,
+    players: allPlayers.filter(p => p.team_name === team.team_name)
+  }))
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Users className="h-5 w-5" />
-          Team Assignment
+          팀 명단
         </CardTitle>
-        <CardDescription>Assign students to teams automatically or manually</CardDescription>
+        <CardDescription>
+          팀별 학생 명단을 확인하세요
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Auto Assignment */}
-        {unassignedParticipants.length > 0 && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="font-medium">Unassigned Students ({unassignedParticipants.length})</h4>
-              <Button onClick={handleAutoAssign} disabled={isLoading} variant="outline" size="sm">
-                <Shuffle className="mr-2 h-4 w-4" />
-                Auto Assign
-              </Button>
-            </div>
-
-            <div className="space-y-2">
-              {unassignedParticipants.map((participant) => (
-                <div key={participant.id} className="flex items-center gap-2">
-                  <Badge variant="outline" className="flex-1">
-                    {participant.nickname}
-                  </Badge>
-                  <Select
-                    value={assignments[participant.id] || ""}
-                    onValueChange={(teamId) => setAssignments((prev) => ({ ...prev, [participant.id]: teamId }))}
-                  >
-                    <SelectTrigger className="w-32">
-                      <SelectValue placeholder="Team" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {teams.map((team) => (
-                        <SelectItem key={team.id} value={team.id}>
-                          {team.team_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              ))}
-            </div>
-
-            {Object.keys(assignments).length > 0 && (
-              <Button onClick={handleManualAssign} disabled={isLoading} className="w-full">
-                {isLoading ? "Assigning..." : "Assign Selected"}
-              </Button>
-            )}
+        {loading ? (
+          <div className="text-center py-8 text-muted-foreground">
+            <p>명단을 불러오는 중...</p>
           </div>
-        )}
-
-        {/* Team Overview */}
-        <div className="space-y-4">
-          <h4 className="font-medium">Team Overview</h4>
-          <div className="grid gap-4">
-            {teams.map((team) => {
-              const teamParticipants = getTeamParticipants(team.id)
+        ) : allPlayers.length > 0 ? (
+          <div className="space-y-4">
+            {playersByTeam.map(({ team, players: teamPlayers }) => {
               return (
                 <Card key={team.id}>
                   <CardContent className="p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h5 className="font-medium">{team.team_name}</h5>
-                      <Badge variant="secondary">{teamParticipants.length} members</Badge>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <h5 className="font-medium">{team.team_name}</h5>
+                        {(team as any).bracket && (
+                          <Badge variant="outline" className="text-xs">
+                            {(team as any).bracket}
+                          </Badge>
+                        )}
+                      </div>
+                      <Badge variant="secondary">
+                        {teamPlayers.length}명
+                      </Badge>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {teamParticipants.map((participant) => (
-                        <div key={participant.id} className="flex items-center gap-1 bg-secondary rounded-md p-1.5">
-                          <span className="text-xs font-medium">{participant.nickname}</span>
-                          <Select
-                            value={participant.team_id || ""}
-                            onValueChange={(teamId) => handleTeamChange(participant.id, teamId)}
-                            disabled={isLoading}
-                          >
-                            <SelectTrigger className="h-5 w-5 p-0 border-0 hover:bg-muted">
-                              <Users className="h-3 w-3" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {teams.map((t) => (
-                                <SelectItem key={t.id} value={t.id}>
-                                  {t.team_name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-5 w-5 p-0 hover:bg-destructive/20"
-                            onClick={() => handleRemoveFromTeam(participant.id)}
-                            disabled={isLoading}
-                          >
-                            <X className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      ))}
-                      {teamParticipants.length === 0 && (
-                        <p className="text-xs text-muted-foreground italic">No members yet</p>
-                      )}
-                    </div>
+                    
+                    {teamPlayers.length === 0 ? (
+                      <p className="text-xs text-muted-foreground italic">팀원이 없습니다</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {teamPlayers.map((player) => {
+                          return (
+                            <div 
+                              key={player.id} 
+                              className="flex items-center gap-2 p-2 border rounded"
+                            >
+                              <span className="flex-1">
+                                {player.player_number && `#${player.player_number} `}
+                                {player.player_name}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               )
             })}
           </div>
-        </div>
+        ) : (
+          <div className="text-center py-8 text-muted-foreground">
+            <p>등록된 학생이 없습니다.</p>
+            <p className="text-sm mt-2">참가자 관리 페이지에서 학생을 추가해주세요.</p>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

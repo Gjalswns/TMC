@@ -76,15 +76,23 @@ export function YearGameAdmin({
   const [session, setSession] = useState<YearGameSession | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [remainingTime, setRemainingTime] = useState<number>(0);
-  // 랜덤 숫자 생성 함수
-  const generateRandomNumbers = () => {
-    const numbers = [];
-    while (numbers.length < 4) {
-      const num = Math.floor(Math.random() * 10); // 0-9
-      if (!numbers.includes(num)) {
-        numbers.push(num);
-      }
-    }
+  const [isLastRound, setIsLastRound] = useState(false);
+  // 랜덤 숫자 생성 함수 (5개 숫자: 0~1, 2~3, 4~5, 6~7, 8~9)
+  const generateRandomNumbers = (): number[] => {
+    const ranges = [
+      [0, 1],        // 범위 1: 0~1
+      [2, 3],        // 범위 2: 2~3
+      [4, 5],        // 범위 3: 4~5
+      [6, 7],        // 범위 4: 6~7
+      [8, 9]         // 범위 5: 8~9
+    ];
+
+    const numbers: number[] = [];
+    ranges.forEach(range => {
+      const randomIndex = Math.floor(Math.random() * range.length);
+      numbers.push(range[randomIndex]);
+    });
+
     return numbers.sort((a, b) => a - b);
   };
 
@@ -96,8 +104,27 @@ export function YearGameAdmin({
   // Load existing session or create new one
   useEffect(() => {
     let isMounted = true;
-    
+
     const loadSession = async () => {
+      // Check if this is the last round AND if we're actually in Year Game round
+      const { data: gameData } = await supabase
+        .from("games")
+        .select("current_round, total_rounds")
+        .eq("id", gameId)
+        .single();
+
+      if (!isMounted) return;
+
+      if (gameData) {
+        setIsLastRound(gameData.current_round >= gameData.total_rounds);
+        
+        // CRITICAL: Only load session if we're actually in Year Game round (Round 1)
+        if (gameData.current_round !== 1) {
+          console.log(`⚠️ Skipping Year Game session load - current round is ${gameData.current_round}, not 1`);
+          return;
+        }
+      }
+
       console.log(
         `🔍 Loading Year Game session for game ${gameId}, round ${currentRound}`
       );
@@ -137,7 +164,7 @@ export function YearGameAdmin({
         }
 
         if (existingSession) {
-          console.log("✅ Found existing Year Game session with", 
+          console.log("✅ Found existing Year Game session with",
             existingSession.year_game_results?.length || 0, "team results");
           setSession(existingSession);
         } else {
@@ -155,9 +182,9 @@ export function YearGameAdmin({
         }
       }
     };
-    
+
     loadSession();
-    
+
     return () => {
       isMounted = false;
     };
@@ -166,10 +193,10 @@ export function YearGameAdmin({
   // Poll for results updates periodically (fallback if realtime fails)
   useEffect(() => {
     if (!session?.id) return;
-    
+
     const pollInterval = setInterval(async () => {
       console.log("🔄 Polling for year game results updates...");
-      
+
       try {
         const { data: updatedResults, error } = await supabase
           .from("year_game_results")
@@ -188,29 +215,38 @@ export function YearGameAdmin({
             )
           `)
           .eq("session_id", session.id);
-        
+
         if (error) {
           console.error("❌ Error polling results:", error);
           return;
         }
-        
+
         if (updatedResults) {
           setSession(prev => {
             if (!prev) return prev;
-            
+
             // Check if any results have changed
             const hasChanges = updatedResults.some((newResult: any) => {
               const oldResult = prev.year_game_results?.find((r: any) => r.id === newResult.id);
-              return !oldResult || 
-                     oldResult.score !== newResult.score ||
-                     oldResult.total_found !== newResult.total_found;
+              return !oldResult ||
+                oldResult.score !== newResult.score ||
+                oldResult.total_found !== newResult.total_found;
             });
-            
+
             if (hasChanges) {
               console.log("📊 Results updated via polling");
-              return { ...prev, year_game_results: updatedResults };
+              // Transform the results to match the expected type
+              const transformedResults = updatedResults.map((result: any) => ({
+                id: result.id,
+                team_id: result.team_id,
+                numbers_found: result.numbers_found,
+                total_found: result.total_found,
+                score: result.score,
+                teams: Array.isArray(result.teams) ? result.teams[0] : result.teams
+              }));
+              return { ...prev, year_game_results: transformedResults };
             }
-            
+
             return prev;
           });
         }
@@ -241,7 +277,7 @@ export function YearGameAdmin({
       const timer = setInterval(() => {
         const remaining = calculateRemainingTime();
         setRemainingTime(remaining);
-        
+
         if (remaining <= 0) {
           clearInterval(timer);
         }
@@ -277,7 +313,7 @@ export function YearGameAdmin({
           game_id: gameId,
           round_number: currentRound,
           target_numbers: numbersToUse,
-          time_limit_seconds: 600, // 10 minutes
+          time_limit_seconds: 1200, // 20분 (Year Game)
           status: "waiting",
         })
         .select()
@@ -352,12 +388,12 @@ export function YearGameAdmin({
     setIsLoading(true);
     try {
       console.log(`🚀 Starting Year Game session ${session.id} for game ${gameId}`);
-      
+
       // 게임 ID 유효성 확인
       if (!gameId) {
         throw new Error("Game ID is missing or invalid");
       }
-      
+
       // 여러 방법으로 즉시 알림
       // 1. localStorage에 게임 시작 신호 저장
       localStorage.setItem(`game-started-${gameId}`, Date.now().toString());
@@ -368,13 +404,13 @@ export function YearGameAdmin({
       const response = await startYearGameSession(session.id);
       if (response.success) {
         console.log("✅ Year Game session started successfully");
-        
+
         // 2. 게임 상태를 'started'로 변경 (중요!)
         console.log(`🎮 Updating game ${gameId} status to 'started', round ${currentRound}`);
-        
+
         const { data: gameUpdateData, error: gameUpdateError } = await supabase
           .from("games")
-          .update({ 
+          .update({
             status: "started",
             current_round: currentRound,
             started_at: new Date().toISOString()
@@ -391,7 +427,7 @@ export function YearGameAdmin({
             details: gameUpdateError.details,
             hint: gameUpdateError.hint
           });
-          
+
           // 게임 상태 업데이트 실패해도 계속 진행 (세션은 이미 시작됨)
           toast({
             title: "Warning",
@@ -407,7 +443,7 @@ export function YearGameAdmin({
         if (sessionResponse.success) {
           setSession(sessionResponse.session);
         }
-        
+
         // 추가 브로드캐스트 (여러 방법 동시 사용)
         try {
           // 1. 직접 브로드캐스트 (여러 채널)
@@ -422,9 +458,9 @@ export function YearGameAdmin({
             await supabase.channel(channelName).send({
               type: "broadcast",
               event: "game_force_start",
-              payload: { 
-                gameId, 
-                sessionId: session.id, 
+              payload: {
+                gameId,
+                sessionId: session.id,
                 timestamp: Date.now(),
                 status: "started",
                 current_round: currentRound
@@ -433,13 +469,13 @@ export function YearGameAdmin({
           }
 
           // 2. 커스텀 이벤트 발생
-          window.dispatchEvent(new CustomEvent('gameStarted', { 
-            detail: { 
-              gameId, 
+          window.dispatchEvent(new CustomEvent('gameStarted', {
+            detail: {
+              gameId,
               sessionId: session.id,
               status: "started",
               current_round: currentRound
-            } 
+            }
           }));
 
           // 3. 추가 localStorage 신호 (게임 상태 업데이트 실패 대비)
@@ -483,23 +519,32 @@ export function YearGameAdmin({
     }
   };
 
-  const endSession = async () => {
+  const endSession = async (advanceToNextRound: boolean = true) => {
     if (!session) return;
 
     setIsLoading(true);
     try {
-      const response = await endYearGameSession(session.id);
+      const response = await endYearGameSession(session.id, advanceToNextRound);
       if (response.success) {
-        // Reload session data
-        const sessionResponse = await getYearGameSession(session.id);
-        if (sessionResponse.success) {
-          setSession(sessionResponse.session);
-        }
         toast({
-          title: "Game Ended",
-          description: "Year Game has ended. Check the final results.",
+          title: advanceToNextRound ? "Moving to Next Round" : "Year Game Ended",
+          description: advanceToNextRound 
+            ? "Year Game ended. Moving to Score Steal..." 
+            : "Year Game has ended. Check the final results.",
         });
-        onGameUpdate?.();
+        
+        // Update parent component immediately
+        if (advanceToNextRound) {
+          // Force immediate update without reload
+          onGameUpdate?.();
+        } else {
+          // Just reload session data if not advancing
+          const sessionResponse = await getYearGameSession(session.id);
+          if (sessionResponse.success) {
+            setSession(sessionResponse.session);
+          }
+          onGameUpdate?.();
+        }
       } else {
         toast({
           title: "Error",
@@ -600,7 +645,7 @@ export function YearGameAdmin({
               Year Game Setup
             </CardTitle>
             <CardDescription>
-              Configure the 4 numbers that teams will use to create expressions. 
+              Configure the 5 numbers that teams will use to create expressions.
               Teams must use ALL numbers exactly once with operations: +, -, ×, ÷, ^, nPr, nCr
             </CardDescription>
           </CardHeader>
@@ -608,12 +653,12 @@ export function YearGameAdmin({
             <Alert>
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                <strong>New Rules:</strong> Teams must use all 4 numbers exactly once each. 
+                <strong>New Rules:</strong> Teams must use all 5 numbers exactly once each.
                 Each number can only be used once in the expression.
               </AlertDescription>
             </Alert>
-            
-            <div className="grid grid-cols-4 gap-4">
+
+            <div className="grid grid-cols-5 gap-4">
               {numberInputs.map((number, index) => (
                 <div key={index} className="space-y-2">
                   <Label htmlFor={`number-${index}`}>Number {index + 1}</Label>
@@ -629,7 +674,7 @@ export function YearGameAdmin({
                 </div>
               ))}
             </div>
-            
+
             <div className="text-sm text-muted-foreground">
               <p className="font-medium mb-1">Allowed Operations:</p>
               <div className="grid grid-cols-2 gap-1 text-xs">
@@ -639,7 +684,7 @@ export function YearGameAdmin({
                 <div>• Parentheses: (3 + 2) × 4</div>
               </div>
             </div>
-            
+
             <div className="flex gap-2">
               <Button
                 onClick={() => setNumberInputs(generateRandomNumbers())}
@@ -672,14 +717,14 @@ export function YearGameAdmin({
             Year Game Control
           </CardTitle>
           <CardDescription>
-            Round {currentRound} - Manage the Year Game session
+            Round {currentRound} - Year Game Session (20분 제한)
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Target Numbers */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h4 className="font-medium">Team Numbers (Must Use All 4)</h4>
+              <h4 className="font-medium">Team Numbers (Must Use All 5)</h4>
               <Button
                 variant="outline"
                 size="sm"
@@ -691,7 +736,7 @@ export function YearGameAdmin({
 
             {showNumberInput ? (
               <div className="space-y-2">
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-5 gap-2">
                   {session.target_numbers.map((num, index) => (
                     <Input
                       key={index}
@@ -722,7 +767,7 @@ export function YearGameAdmin({
                   size="sm"
                   onClick={async () => {
                     const newNumbers = generateRandomNumbers();
-                    
+
                     // Update in database
                     const { error } = await supabase
                       .from("year_game_sessions")
@@ -758,7 +803,7 @@ export function YearGameAdmin({
           {/* Timer */}
           {session.status === "active" && (
             <div>
-              <h4 className="font-medium mb-2">Time Remaining</h4>
+              <h4 className="font-medium mb-2">남은 시간 (20분 제한)</h4>
               <div className="text-3xl font-bold mb-2">
                 {formatTime(remainingTime)}
               </div>
@@ -780,25 +825,53 @@ export function YearGameAdmin({
             )}
 
             {session.status === "active" && (
-              <Button
-                onClick={endSession}
-                disabled={isLoading}
-                variant="destructive"
-                className="flex items-center gap-2"
-              >
-                <Square className="h-4 w-4" />
-                End Game
-              </Button>
+              <>
+                <Button
+                  onClick={() => endSession(false)}
+                  disabled={isLoading}
+                  variant="outline"
+                  className="flex items-center gap-2"
+                >
+                  <Square className="h-4 w-4" />
+                  End Game
+                </Button>
+                {!isLastRound && (
+                  <Button
+                    onClick={() => endSession(true)}
+                    disabled={isLoading}
+                    variant="default"
+                  >
+                    다음 라운드로
+                  </Button>
+                )}
+              </>
             )}
 
             {session.status === "finished" && (
-              <Button
-                onClick={createNewSession}
-                disabled={isLoading}
-                variant="outline"
-              >
-                New Session
-              </Button>
+              <>
+                {!isLastRound && (
+                  <Button
+                    onClick={() => endSession(true)}
+                    disabled={isLoading}
+                    variant="default"
+                    className="mr-2"
+                  >
+                    다음 라운드로
+                  </Button>
+                )}
+                {isLastRound && (
+                  <Badge variant="default" className="text-lg px-4 py-2 mr-2">
+                    🎉 모든 라운드 완료!
+                  </Badge>
+                )}
+                <Button
+                  onClick={createNewSession}
+                  disabled={isLoading}
+                  variant="outline"
+                >
+                  New Session
+                </Button>
+              </>
             )}
           </div>
 
@@ -809,8 +882,8 @@ export function YearGameAdmin({
                 session.status === "active"
                   ? "default"
                   : session.status === "finished"
-                  ? "secondary"
-                  : "outline"
+                    ? "secondary"
+                    : "outline"
               }
             >
               {session.status === "waiting" && "Waiting to Start"}
@@ -840,11 +913,10 @@ export function YearGameAdmin({
                 return (
                   <div
                     key={result.team_id}
-                    className={`p-4 rounded-lg border ${
-                      isWinning
-                        ? "bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-700"
-                        : "bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-700"
-                    }`}
+                    className={`p-4 rounded-lg border ${isWinning
+                      ? "bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-700"
+                      : "bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-700"
+                      }`}
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-3">
@@ -884,11 +956,10 @@ export function YearGameAdmin({
                         (num) => (
                           <div
                             key={num}
-                            className={`w-7 h-7 rounded text-xs flex items-center justify-center font-medium ${
-                              result.numbers_found.includes(num)
-                                ? "bg-green-500 text-white"
-                                : "bg-gray-200 text-gray-600"
-                            }`}
+                            className={`w-7 h-7 rounded text-xs flex items-center justify-center font-medium ${result.numbers_found.includes(num)
+                              ? "bg-green-500 text-white"
+                              : "bg-gray-200 text-gray-600"
+                              }`}
                           >
                             {num}
                           </div>
@@ -923,7 +994,7 @@ export function YearGameAdmin({
           <div>
             <h4 className="font-medium">게임 목표</h4>
             <p className="text-sm text-muted-foreground">
-              각 팀은 4개의 숫자를 정확히 한 번씩 사용하여 1부터 100까지의 숫자를 만드는 수식을 작성해야 합니다.
+              각 팀은 5개의 숫자를 정확히 한 번씩 사용하여 1부터 100까지의 숫자를 만드는 수식을 작성해야 합니다.
             </p>
           </div>
 
@@ -937,8 +1008,8 @@ export function YearGameAdmin({
           <div>
             <h4 className="font-medium">점수 시스템</h4>
             <p className="text-sm text-muted-foreground">
-              • 각 숫자 = 그 숫자만큼 점수<br/>
-              • 예) 76을 만들면 76점 획득<br/>
+              • 각 숫자 = 그 숫자만큼 점수<br />
+              • 예) 76을 만들면 76점 획득<br />
               • 팀 단위로 점수 합산
             </p>
           </div>

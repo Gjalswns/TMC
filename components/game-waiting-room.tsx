@@ -22,6 +22,21 @@ interface GameWaitingRoomProps {
   participant: Participant | null;
 }
 
+// 현재 라운드에 따른 게임 경로 결정
+const getGameRoute = (currentRound: number) => {
+  switch (currentRound) {
+    case 0:
+    case 1:
+      return "year-game";
+    case 2:
+      return "score-steal";
+    case 3:
+      return "relay-quiz";
+    default:
+      return "year-game"; // 기본값
+  }
+};
+
 export function GameWaitingRoom({
   game: initialGame,
   participant,
@@ -34,6 +49,21 @@ export function GameWaitingRoom({
   } | null>(null);
   const router = useRouter();
 
+  // 현재 라운드에 따른 대기 메시지 결정
+  const getWaitingMessage = (currentRound: number) => {
+    switch (currentRound) {
+      case 0:
+      case 1:
+        return "Year Game is starting soon...";
+      case 2:
+        return "Score Steal Game is starting soon...";
+      case 3:
+        return "Relay Quiz is starting soon...";
+      default:
+        return "Next game is starting soon...";
+    }
+  };
+
   // localStorage + 커스텀 이벤트를 이용한 즉시 통신
   useEffect(() => {
     let redirected = false;
@@ -41,8 +71,9 @@ export function GameWaitingRoom({
     const redirect = () => {
       if (!redirected) {
         redirected = true;
-        console.log("✅ Redirecting to Year Game...");
-        window.location.href = `/game/${game.id}/year-game?participant=${participant?.id}`;
+        const targetGame = getGameRoute(game.current_round);
+        console.log(`✅ Redirecting to ${targetGame}...`);
+        window.location.href = `/game/${game.id}/${targetGame}?participant=${participant?.id}`;
       }
     };
 
@@ -199,8 +230,9 @@ export function GameWaitingRoom({
       .on('broadcast', { event: 'year_game_started' }, (payload) => {
         console.log('📡 Received year_game_started broadcast:', payload);
         if (payload.payload.gameId === game.id) {
-          console.log("✅ Year Game started via broadcast! Redirecting...");
-          window.location.href = `/game/${game.id}/year-game?participant=${participant?.id}`;
+          const targetGame = getGameRoute(payload.payload.current_round || game.current_round);
+          console.log(`✅ Game started via broadcast! Redirecting to ${targetGame}...`);
+          window.location.href = `/game/${game.id}/${targetGame}?participant=${participant?.id}`;
         }
       })
       .on('postgres_changes', { 
@@ -213,8 +245,9 @@ export function GameWaitingRoom({
         const newGame = payload.new as Game;
         setGame(newGame);
         if (newGame.status === "started") {
-          console.log("✅ Game started via postgres! Redirecting...");
-          window.location.href = `/game/${game.id}/year-game?participant=${participant?.id}`;
+          const targetGame = getGameRoute(newGame.current_round);
+          console.log(`✅ Game started via postgres! Redirecting to ${targetGame}...`);
+          window.location.href = `/game/${game.id}/${targetGame}?participant=${participant?.id}`;
         }
       })
       .subscribe();
@@ -225,8 +258,9 @@ export function GameWaitingRoom({
       .on('broadcast', { event: 'year_game_started' }, (payload) => {
         console.log('📡 Received global year_game_started broadcast:', payload);
         if (payload.payload.gameId === game.id) {
-          console.log("✅ Year Game started via global broadcast! Redirecting...");
-          window.location.href = `/game/${game.id}/year-game?participant=${participant?.id}`;
+          const targetGame = getGameRoute(payload.payload.current_round || game.current_round);
+          console.log(`✅ Game started via global broadcast! Redirecting to ${targetGame}...`);
+          window.location.href = `/game/${game.id}/${targetGame}?participant=${participant?.id}`;
         }
       })
       .subscribe();
@@ -237,8 +271,9 @@ export function GameWaitingRoom({
       .on('broadcast', { event: 'session_started' }, (payload) => {
         console.log('📡 Received year-game session_started broadcast:', payload);
         if (payload.payload.gameId === game.id) {
-          console.log("✅ Year Game session started via dedicated broadcast! Redirecting...");
-          window.location.href = `/game/${game.id}/year-game?participant=${participant?.id}`;
+          const targetGame = getGameRoute(payload.payload.current_round || game.current_round);
+          console.log(`✅ Game session started via dedicated broadcast! Redirecting to ${targetGame}...`);
+          window.location.href = `/game/${game.id}/${targetGame}?participant=${participant?.id}`;
         }
       })
       .subscribe();
@@ -260,8 +295,9 @@ export function GameWaitingRoom({
 
       // Always redirect to Year Game when game starts
       if (newGame.status === "started") {
-        console.log("Redirecting to Year Game...");
-        window.location.href = `/game/${newGame.id}/year-game?participant=${participant?.id}`;
+        const targetGame = getGameRoute(newGame.current_round);
+        console.log(`Redirecting to ${targetGame}...`);
+        window.location.href = `/game/${newGame.id}/${targetGame}?participant=${participant?.id}`;
       }
     },
     [router, participant?.id]
@@ -295,26 +331,65 @@ export function GameWaitingRoom({
           
           // 게임이 정말로 시작되었을 때만 리다이렉트 (더 엄격한 조건)
           if (updatedGame.status === "started" && updatedGame.current_round >= 1) {
-            console.log("✅ Game started via polling! Redirecting to Year Game...");
+            const targetGame = getGameRoute(updatedGame.current_round);
+            console.log(`✅ Game started via polling! Redirecting to ${targetGame}...`);
             redirected = true;
-            window.location.href = `/game/${updatedGame.id}/year-game?participant=${participant?.id}`;
+            window.location.href = `/game/${updatedGame.id}/${targetGame}?participant=${participant?.id}`;
             return;
           }
         }
 
-        // 2. Year Game 세션 직접 체크 (ACTIVE 세션만)
-        const { data: yearGameSessions } = await supabase
-          .from("year_game_sessions")
-          .select("status, game_id, id")
-          .eq("game_id", game.id)
-          .eq("status", "active"); // waiting 상태 제외, active만 체크
+        // 2. 현재 라운드에 맞는 세션 체크 (ACTIVE 세션만)
+        if (updatedGame && updatedGame.current_round >= 1) {
+          let hasActiveSession = false;
+          
+          // Round 1: Year Game
+          if (updatedGame.current_round === 1) {
+            const { data: yearGameSessions } = await supabase
+              .from("year_game_sessions")
+              .select("status, game_id, id")
+              .eq("game_id", game.id)
+              .eq("status", "active");
 
-        if (yearGameSessions && yearGameSessions.length > 0) {
-          console.log(`✅ Active Year Game sessions found: ${yearGameSessions.length}`);
-          console.log("✅ Year Game session is ACTIVE! Redirecting...");
-          redirected = true;
-          window.location.href = `/game/${game.id}/year-game?participant=${participant?.id}`;
-          return;
+            if (yearGameSessions && yearGameSessions.length > 0) {
+              console.log(`✅ Active Year Game session found`);
+              hasActiveSession = true;
+            }
+          }
+          // Round 2: Score Steal
+          else if (updatedGame.current_round === 2) {
+            const { data: scoreStealSessions } = await supabase
+              .from("score_steal_sessions")
+              .select("status, game_id, id")
+              .eq("game_id", game.id)
+              .eq("status", "active");
+
+            if (scoreStealSessions && scoreStealSessions.length > 0) {
+              console.log(`✅ Active Score Steal session found`);
+              hasActiveSession = true;
+            }
+          }
+          // Round 3: Relay Quiz
+          else if (updatedGame.current_round === 3) {
+            const { data: relayQuizSessions } = await supabase
+              .from("relay_quiz_sessions")
+              .select("status, game_id, id")
+              .eq("game_id", game.id)
+              .eq("status", "active");
+
+            if (relayQuizSessions && relayQuizSessions.length > 0) {
+              console.log(`✅ Active Relay Quiz session found`);
+              hasActiveSession = true;
+            }
+          }
+
+          if (hasActiveSession) {
+            const targetGame = getGameRoute(updatedGame.current_round);
+            console.log(`✅ Game session is ACTIVE! Redirecting to ${targetGame}...`);
+            redirected = true;
+            window.location.href = `/game/${updatedGame.id}/${targetGame}?participant=${participant?.id}`;
+            return;
+          }
         }
 
         // 3. 참가자 수 업데이트 (매 5번째 폴링마다만)
@@ -493,7 +568,7 @@ export function GameWaitingRoom({
             <div className="flex items-center justify-center gap-2">
               <Loader2 className="h-5 w-5 animate-spin" />
               <p className="text-muted-foreground">
-                Waiting for teacher to start the game...
+                {getWaitingMessage(game.current_round)}
               </p>
             </div>
             <p className="text-sm text-muted-foreground">

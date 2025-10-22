@@ -90,6 +90,7 @@ export function RelayQuizAdmin({
   const [isLoading, setIsLoading] = useState(false);
   const [showQuestionForm, setShowQuestionForm] = useState(false);
   const [remainingTime, setRemainingTime] = useState<number>(0);
+  const [isLastRound, setIsLastRound] = useState(false);
   const { toast } = useToast();
 
   // Form state for new question
@@ -103,6 +104,23 @@ export function RelayQuizAdmin({
   // Load session and data
   useEffect(() => {
     const loadData = async () => {
+      // Check if this is the last round AND if we're actually in Relay Quiz round
+      const { data: gameData } = await supabase
+        .from("games")
+        .select("current_round, total_rounds")
+        .eq("id", gameId)
+        .single();
+
+      if (gameData) {
+        setIsLastRound(gameData.current_round >= gameData.total_rounds);
+        
+        // CRITICAL: Only load session if we're actually in Relay Quiz round (Round 3)
+        if (gameData.current_round !== 3) {
+          console.log(`⚠️ Skipping Relay Quiz session load - current round is ${gameData.current_round}, not 3`);
+          return;
+        }
+      }
+
       // Check for existing session
       const { data: existingSession } = await supabase
         .from("relay_quiz_sessions")
@@ -170,7 +188,7 @@ export function RelayQuizAdmin({
   const createNewSession = async () => {
     setIsLoading(true);
     try {
-      const result = await createRelayQuizSession(gameId, currentRound, 300); // 5 minutes
+      const result = await createRelayQuizSession(gameId, currentRound, 300); // 5분 (한 문제당)
       if (result.success) {
         setSession(result.session);
         toast({
@@ -231,23 +249,52 @@ export function RelayQuizAdmin({
     }
   };
 
-  const endSession = async () => {
+  const endSession = async (advanceToNextRound: boolean = false) => {
     if (!session) return;
 
     setIsLoading(true);
     try {
-      const result = await endRelayQuizSession(session.id);
-      if (result.success) {
-        setSession({
-          ...session,
-          status: "finished",
-          ended_at: new Date().toISOString(),
-        });
+      // Check if this is the last round
+      const { data: gameData } = await supabase
+        .from("games")
+        .select("current_round, total_rounds")
+        .eq("id", gameId)
+        .single();
+
+      const isLastRound = gameData && gameData.current_round >= gameData.total_rounds;
+
+      if (advanceToNextRound && isLastRound) {
         toast({
-          title: "Game Ended",
-          description: "Relay Quiz has ended. Check the final results.",
+          title: "게임 완료",
+          description: "모든 라운드가 완료되었습니다! 최종 점수를 확인하세요.",
+          variant: "default",
         });
-        onGameUpdate?.();
+        // Just end the session without advancing
+        advanceToNextRound = false;
+      }
+
+      const result = await endRelayQuizSession(session.id, advanceToNextRound);
+      if (result.success) {
+        toast({
+          title: advanceToNextRound ? "Moving to Next Round" : "Game Ended",
+          description: advanceToNextRound 
+            ? "Relay Quiz ended. Moving to next game..." 
+            : "Relay Quiz has ended. Check the final results.",
+        });
+        
+        // Update parent component immediately
+        if (advanceToNextRound) {
+          // Force immediate update without reload
+          onGameUpdate?.();
+        } else {
+          // Just update session state if not advancing
+          setSession({
+            ...session,
+            status: "finished",
+            ended_at: new Date().toISOString(),
+          });
+          onGameUpdate?.();
+        }
       } else {
         toast({
           title: "Error",
@@ -395,7 +442,7 @@ export function RelayQuizAdmin({
             Relay Quiz Control
           </CardTitle>
           <CardDescription>
-            Round {currentRound} - Manage the Relay Quiz game session
+            Round {currentRound} - Relay Quiz (한 문제당 5분 제한)
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -438,14 +485,39 @@ export function RelayQuizAdmin({
                     </Button>
                   )}
                   {session.status === "active" && (
+                    <>
+                      <Button
+                        onClick={() => endSession(false)}
+                        disabled={isLoading}
+                        variant="outline"
+                      >
+                        <Square className="h-4 w-4 mr-2" />
+                        End Game
+                      </Button>
+                      {!isLastRound && (
+                        <Button
+                          onClick={() => endSession(true)}
+                          disabled={isLoading}
+                          variant="default"
+                        >
+                          다음 라운드로
+                        </Button>
+                      )}
+                    </>
+                  )}
+                  {session.status === "finished" && !isLastRound && (
                     <Button
-                      onClick={endSession}
+                      onClick={() => endSession(true)}
                       disabled={isLoading}
-                      variant="destructive"
+                      variant="default"
                     >
-                      <Square className="h-4 w-4 mr-2" />
-                      End Game
+                      다음 라운드로
                     </Button>
+                  )}
+                  {session.status === "finished" && isLastRound && (
+                    <Badge variant="default" className="text-lg px-4 py-2">
+                      🎉 모든 라운드 완료!
+                    </Badge>
                   )}
                 </div>
               </div>
@@ -453,7 +525,7 @@ export function RelayQuizAdmin({
               {/* Timer */}
               {session.status === "active" && (
                 <div>
-                  <h4 className="font-medium mb-2">Time Remaining</h4>
+                  <h4 className="font-medium mb-2">남은 시간 (문제당 5분)</h4>
                   <div className="text-3xl font-bold mb-2">
                     {formatTime(remainingTime)}
                   </div>

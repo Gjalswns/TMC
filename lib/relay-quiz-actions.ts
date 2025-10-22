@@ -111,10 +111,22 @@ export async function startRelayQuizSession(sessionId: string) {
 }
 
 /**
- * End a Relay Quiz Game session
+ * End a Relay Quiz Game session and advance to next round
  */
-export async function endRelayQuizSession(sessionId: string) {
+export async function endRelayQuizSession(sessionId: string, advanceToNextRound: boolean = false) {
   try {
+    // Get session info to find game_id
+    const { data: session, error: sessionError } = await supabase
+      .from("relay_quiz_sessions")
+      .select("game_id, round_number")
+      .eq("id", sessionId)
+      .single();
+
+    if (sessionError || !session) {
+      throw new Error("Session not found");
+    }
+
+    // Update session status to finished
     const { error } = await supabase
       .from("relay_quiz_sessions")
       .update({
@@ -124,6 +136,51 @@ export async function endRelayQuizSession(sessionId: string) {
       .eq("id", sessionId);
 
     if (error) throw error;
+
+    // If advanceToNextRound is true, move to next round
+    if (advanceToNextRound) {
+      const { data: game, error: gameError } = await supabase
+        .from("games")
+        .select("current_round, total_rounds")
+        .eq("id", session.game_id)
+        .single();
+
+      if (gameError || !game) {
+        console.error("Failed to get game info:", gameError);
+      } else {
+        const nextRoundNumber = game.current_round + 1;
+        
+        // Only advance if not at final round
+        if (nextRoundNumber <= game.total_rounds) {
+          const { error: updateError } = await supabase
+            .from("games")
+            .update({ current_round: nextRoundNumber })
+            .eq("id", session.game_id);
+
+          if (updateError) {
+            console.error("Failed to advance round:", updateError);
+          } else {
+            console.log(`✅ Advanced to round ${nextRoundNumber}`);
+            
+            // Create appropriate session for the new round
+            if (nextRoundNumber === 2) {
+              // Create Score Steal session for round 2
+              const { createScoreStealSession } = await import("./score-steal-actions");
+              const scoreStealResult = await createScoreStealSession(session.game_id, nextRoundNumber);
+              if (!scoreStealResult.success) {
+                console.error("Failed to create Score Steal session:", scoreStealResult.error);
+              }
+            } else if (nextRoundNumber === 3 || nextRoundNumber === 4) {
+              // Create Relay Quiz session for rounds 3-4
+              const relayQuizResult = await createRelayQuizSession(session.game_id, nextRoundNumber);
+              if (!relayQuizResult.success) {
+                console.error("Failed to create Relay Quiz session:", relayQuizResult.error);
+              }
+            }
+          }
+        }
+      }
+    }
 
     revalidatePath("/admin");
     return { success: true };
@@ -145,9 +202,30 @@ export async function createRelayQuizQuestion(
   questionOrder: number,
   questionText: string,
   correctAnswer: string,
-  points: number = 10
+  points: number = 10,
+  timeLimitSeconds?: number
 ) {
   try {
+    // Calculate time limit based on question order if not provided
+    // Q1=3min(180s), Q2=4min(240s), Q3=5min(300s), Q4=5min(300s)
+    let timeLimit = timeLimitSeconds;
+    if (!timeLimit) {
+      switch (questionOrder) {
+        case 1:
+          timeLimit = 180; // 3 minutes
+          break;
+        case 2:
+          timeLimit = 240; // 4 minutes
+          break;
+        case 3:
+        case 4:
+          timeLimit = 300; // 5 minutes
+          break;
+        default:
+          timeLimit = 300; // Default 5 minutes
+      }
+    }
+
     const { data: question, error } = await supabase
       .from("relay_quiz_questions")
       .insert({
@@ -157,6 +235,7 @@ export async function createRelayQuizQuestion(
         question_text: questionText,
         correct_answer: correctAnswer,
         points,
+        time_limit_seconds: timeLimit,
       })
       .select()
       .single();

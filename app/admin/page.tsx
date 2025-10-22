@@ -44,12 +44,19 @@ export default async function AdminPage() {
           </div>
           <p className="text-muted-foreground">Create and manage classroom games</p>
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link href="/join">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Join
-          </Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/participants">
+              참가자 관리
+            </Link>
+          </Button>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/join">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Join
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {hasSupabaseError && (

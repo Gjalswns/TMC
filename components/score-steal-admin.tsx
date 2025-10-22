@@ -78,9 +78,9 @@ interface ScoreStealSession {
 
 interface ScoreStealQuestion {
   id: string;
-  question_text: string;
+  title: string;
+  question_image_url: string;
   correct_answer: string;
-  difficulty: "easy" | "medium" | "hard";
   points: number;
 }
 
@@ -108,18 +108,28 @@ export function ScoreStealAdmin({
   const [protectedTeams, setProtectedTeams] = useState<any[]>([]);
   const [attempts, setAttempts] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [showQuestionForm, setShowQuestionForm] = useState(false);
+  const [isLastRound, setIsLastRound] = useState(false);
   const { toast } = useToast();
-
-  // Form state for new question
-  const [newQuestion, setNewQuestion] = useState({
-    questionText: "",
-    correctAnswer: "",
-    difficulty: "easy" as "easy" | "medium" | "hard",
-  });
 
   // Load session and data
   const loadData = useCallback(async () => {
+    // Check if this is the last round AND if we're actually in Score Steal round
+    const { data: gameData } = await supabase
+      .from("games")
+      .select("current_round, total_rounds")
+      .eq("id", gameId)
+      .single();
+
+    if (gameData) {
+      setIsLastRound(gameData.current_round >= gameData.total_rounds);
+      
+      // CRITICAL: Only load session if we're actually in Score Steal round (Round 2)
+      if (gameData.current_round !== 2) {
+        console.log(`⚠️ Skipping Score Steal session load - current round is ${gameData.current_round}, not 2`);
+        return;
+      }
+    }
+
     // Check for existing session
     const { data: existingSession } = await supabase
       .from("score_steal_sessions")
@@ -144,15 +154,28 @@ export function ScoreStealAdmin({
       setSession(null);
     }
 
-    // Load questions for current round
-    const questionsResult = await getScoreStealQuestions(gameId, currentRound);
-    if (questionsResult.success) {
-      setQuestions(questionsResult.questions);
+    // Load questions from central question management (score_steal category)
+    const { data: centralQuestions, error: questionsError } = await supabase
+      .from('central_questions')
+      .select(`
+        id,
+        title,
+        question_image_url,
+        correct_answer,
+        points,
+        question_categories!inner(name)
+      `)
+      .eq('question_categories.name', 'score_steal')
+      .eq('is_active', true)
+      .order('created_at');
+
+    if (!questionsError && centralQuestions) {
+      setQuestions(centralQuestions);
     }
 
     // Load teams
     const teamsResult = await getAvailableTargets(gameId);
-    if (teamsResult.success) {
+    if (teamsResult.success && teamsResult.teams) {
       setTeams(teamsResult.teams);
     }
 
@@ -179,26 +202,40 @@ export function ScoreStealAdmin({
   }, [session?.phase, loadData]);
 
   const createNewSession = async () => {
+    if (questions.length === 0) {
+      toast({
+        title: "문제가 필요합니다",
+        description: "먼저 중앙 문제 관리에서 점수뺏기 문제를 추가해주세요.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsLoading(true);
     try {
+      console.log(`Creating score steal session for game ${gameId}, round ${currentRound}`);
       const result = await createScoreStealSession(gameId, currentRound);
+      
       if (result.success) {
+        console.log("Session created successfully:", result.sessionId);
         await loadData();
         toast({
           title: "세션 생성 완료",
-          description: "점수 뺏기 세션이 생성되었습니다",
+          description: "점수 뺏기 세션이 생성되었습니다. 이제 게임을 시작할 수 있습니다.",
         });
       } else {
+        console.error("Session creation failed:", result.error);
         toast({
-          title: "오류",
-          description: result.error || "세션 생성 실패",
+          title: "세션 생성 실패",
+          description: result.error || "알 수 없는 오류가 발생했습니다.",
           variant: "destructive",
         });
       }
     } catch (error) {
+      console.error("Session creation error:", error);
       toast({
-        title: "오류",
-        description: "세션 생성 실패",
+        title: "세션 생성 오류",
+        description: "네트워크 오류가 발생했습니다. 다시 시도해주세요.",
         variant: "destructive",
       });
     } finally {
@@ -237,49 +274,40 @@ export function ScoreStealAdmin({
     }
   };
 
-  const handleCreateQuestion = async () => {
-    if (!newQuestion.questionText || !newQuestion.correctAnswer) {
-      toast({
-        title: "오류",
-        description: "모든 필드를 입력해주세요",
-        variant: "destructive",
-      });
-      return;
-    }
+  const endSession = async (advanceToNextRound: boolean = false) => {
+    if (!session) return;
 
     setIsLoading(true);
     try {
-      const result = await createScoreStealQuestion(
-        gameId,
-        currentRound,
-        newQuestion.questionText,
-        newQuestion.correctAnswer,
-        newQuestion.difficulty
-      );
-
+      const result = await endScoreStealSession(session.id, advanceToNextRound);
       if (result.success) {
-        setQuestions([...questions, result.question]);
-        setNewQuestion({
-          questionText: "",
-          correctAnswer: "",
-          difficulty: "easy",
-        });
-        setShowQuestionForm(false);
         toast({
-          title: "문제 생성 완료",
-          description: "새 문제가 추가되었습니다",
+          title: advanceToNextRound ? "다음 라운드로 이동" : "게임 종료",
+          description: advanceToNextRound 
+            ? "점수뺏기 게임이 종료되었습니다. 이어게임으로 이동합니다..." 
+            : "점수뺏기 게임이 종료되었습니다.",
         });
+        
+        // Update parent component immediately
+        if (advanceToNextRound) {
+          // Force immediate update without reload
+          onGameUpdate?.();
+        } else {
+          // Just reload data if not advancing
+          await loadData();
+          onGameUpdate?.();
+        }
       } else {
         toast({
           title: "오류",
-          description: result.error || "문제 생성 실패",
+          description: result.error || "게임 종료 실패",
           variant: "destructive",
         });
       }
     } catch (error) {
       toast({
         title: "오류",
-        description: "문제 생성 실패",
+        description: "게임 종료 실패",
         variant: "destructive",
       });
     } finally {
@@ -353,6 +381,98 @@ export function ScoreStealAdmin({
 
   return (
     <div className="space-y-6">
+      {/* Game Setup Guide */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Target className="h-5 w-5" />
+            점수뺏기 게임 설정 가이드
+          </CardTitle>
+          <CardDescription>
+            게임을 시작하기 전에 다음 단계를 따라주세요
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
+                questions.length > 0 ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
+              }`}>
+                1
+              </div>
+              <div className="flex-1">
+                <p className="font-medium">문제 준비</p>
+                <p className="text-sm text-muted-foreground">
+                  중앙 문제 관리에서 점수뺏기 문제 추가 ({questions.length}개 준비됨)
+                </p>
+              </div>
+              {questions.length > 0 ? (
+                <CheckCircle className="h-5 w-5 text-green-500" />
+              ) : (
+                <AlertCircle className="h-5 w-5 text-gray-400" />
+              )}
+            </div>
+            
+            <div className="flex items-center gap-3">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
+                session ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
+              }`}>
+                2
+              </div>
+              <div className="flex-1">
+                <p className="font-medium">세션 생성</p>
+                <p className="text-sm text-muted-foreground">
+                  점수뺏기 세션 생성 ({session ? '완료' : '대기 중'})
+                </p>
+              </div>
+              {session ? (
+                <CheckCircle className="h-5 w-5 text-green-500" />
+              ) : (
+                <AlertCircle className="h-5 w-5 text-gray-400" />
+              )}
+            </div>
+            
+            <div className="flex items-center gap-3">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
+                session?.status === 'active' ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
+              }`}>
+                3
+              </div>
+              <div className="flex-1">
+                <p className="font-medium">게임 시작</p>
+                <p className="text-sm text-muted-foreground">
+                  세션 시작 버튼 클릭 ({session?.status === 'active' ? '진행 중' : '대기 중'})
+                </p>
+              </div>
+              {session?.status === 'active' ? (
+                <CheckCircle className="h-5 w-5 text-green-500" />
+              ) : (
+                <AlertCircle className="h-5 w-5 text-gray-400" />
+              )}
+            </div>
+            
+            <div className="flex items-center gap-3">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
+                session?.current_question_id ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
+              }`}>
+                4
+              </div>
+              <div className="flex-1">
+                <p className="font-medium">문제 공개</p>
+                <p className="text-sm text-muted-foreground">
+                  문제 선택 후 공개 버튼 클릭 ({session?.current_question_id ? '공개됨' : '대기 중'})
+                </p>
+              </div>
+              {session?.current_question_id ? (
+                <CheckCircle className="h-5 w-5 text-green-500" />
+              ) : (
+                <AlertCircle className="h-5 w-5 text-gray-400" />
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Session Control */}
       <Card>
         <CardHeader>
@@ -361,21 +481,39 @@ export function ScoreStealAdmin({
             점수 뺏기 게임 관리
           </CardTitle>
           <CardDescription>
-            라운드 {currentRound} - 실시간 경쟁 모드
+            라운드 {currentRound} - Score Steal Game (시간 제한 없음)
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {!session ? (
             <div className="space-y-4">
-              <Alert>
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  이 라운드의 세션이 없습니다. 세션을 생성하여 게임을 시작하세요.
-                </AlertDescription>
-              </Alert>
-              <Button onClick={createNewSession} disabled={isLoading}>
+              {questions.length === 0 ? (
+                <Alert>
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    <strong>세션을 생성할 수 없습니다!</strong><br/>
+                    먼저 중앙 문제 관리에서 점수뺏기 문제를 추가해주세요.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Alert>
+                  <CheckCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    문제가 준비되었습니다. 세션을 생성하여 게임을 시작하세요.
+                  </AlertDescription>
+                </Alert>
+              )}
+              <Button 
+                onClick={createNewSession} 
+                disabled={isLoading || questions.length === 0}
+              >
                 {isLoading ? "생성 중..." : "점수 뺏기 세션 생성"}
               </Button>
+              {questions.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  세션을 생성하려면 최소 1개의 점수뺏기 문제가 필요합니다.
+                </p>
+              )}
             </div>
           ) : (
             <div className="space-y-4">
@@ -415,6 +553,41 @@ export function ScoreStealAdmin({
                       게임 시작
                     </Button>
                   )}
+                  {session.status === "active" && (
+                    <>
+                      <Button
+                        onClick={() => endSession(false)}
+                        disabled={isLoading}
+                        variant="outline"
+                      >
+                        <Square className="h-4 w-4 mr-2" />
+                        게임 종료
+                      </Button>
+                      {!isLastRound && (
+                        <Button
+                          onClick={() => endSession(true)}
+                          disabled={isLoading}
+                          variant="default"
+                        >
+                          다음 라운드로
+                        </Button>
+                      )}
+                    </>
+                  )}
+                  {session.status === "finished" && !isLastRound && (
+                    <Button
+                      onClick={() => endSession(true)}
+                      disabled={isLoading}
+                      variant="default"
+                    >
+                      다음 라운드로
+                    </Button>
+                  )}
+                  {session.status === "finished" && isLastRound && (
+                    <Badge variant="default" className="text-lg px-4 py-2">
+                      🎉 모든 라운드 완료!
+                    </Badge>
+                  )}
                 </div>
               </div>
             </div>
@@ -430,84 +603,40 @@ export function ScoreStealAdmin({
             문제 관리
           </CardTitle>
           <CardDescription>
-            이 라운드의 문제를 관리합니다 (라운드당 1개 권장)
+            중앙 문제 관리에서 점수뺏기 문제를 선택합니다
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {questions.length === 0 ? (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                <strong>점수뺏기 문제가 없습니다!</strong><br/>
+                게임을 시작하기 전에 중앙 문제 관리에서 점수뺏기 카테고리에 문제를 추가해주세요.
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Alert>
+              <CheckCircle className="h-4 w-4" />
+              <AlertDescription>
+                점수뺏기 문제 {questions.length}개가 준비되었습니다. 
+                문제를 추가하거나 수정하려면 중앙 문제 관리로 이동하세요.
+              </AlertDescription>
+            </Alert>
+          )}
+
           <div className="flex justify-between items-center">
             <span className="text-sm text-muted-foreground">
-              {questions.length}개의 문제
+              {questions.length}개의 사용 가능한 문제
             </span>
             <Button
-              onClick={() => setShowQuestionForm(!showQuestionForm)}
+              onClick={() => window.open('/admin/questions', '_blank')}
               variant="outline"
             >
               <Plus className="h-4 w-4 mr-2" />
-              문제 추가
+              중앙 문제 관리로 이동
             </Button>
           </div>
-
-          {showQuestionForm && (
-            <div className="space-y-4 p-4 border rounded-lg">
-              <div>
-                <Label htmlFor="questionText">문제</Label>
-                <Textarea
-                  id="questionText"
-                  value={newQuestion.questionText}
-                  onChange={(e) =>
-                    setNewQuestion({
-                      ...newQuestion,
-                      questionText: e.target.value,
-                    })
-                  }
-                  placeholder="문제를 입력하세요..."
-                />
-              </div>
-              <div>
-                <Label htmlFor="correctAnswer">정답</Label>
-                <Input
-                  id="correctAnswer"
-                  value={newQuestion.correctAnswer}
-                  onChange={(e) =>
-                    setNewQuestion({
-                      ...newQuestion,
-                      correctAnswer: e.target.value,
-                    })
-                  }
-                  placeholder="정답을 입력하세요..."
-                />
-              </div>
-              <div>
-                <Label htmlFor="difficulty">난이도</Label>
-                <Select
-                  value={newQuestion.difficulty}
-                  onValueChange={(value: "easy" | "medium" | "hard") =>
-                    setNewQuestion({ ...newQuestion, difficulty: value })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="easy">쉬움 (10점)</SelectItem>
-                    <SelectItem value="medium">보통 (20점)</SelectItem>
-                    <SelectItem value="hard">어려움 (30점)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex gap-2">
-                <Button onClick={handleCreateQuestion} disabled={isLoading}>
-                  {isLoading ? "생성 중..." : "문제 생성"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowQuestionForm(false)}
-                >
-                  취소
-                </Button>
-              </div>
-            </div>
-          )}
 
           {/* Questions List */}
           <div className="space-y-2">
@@ -521,13 +650,23 @@ export function ScoreStealAdmin({
                 }`}
               >
                 <div className="flex-1">
-                  <p className="font-medium">{question.question_text}</p>
+                  <p className="font-medium">{question.title}</p>
                   <p className="text-sm text-muted-foreground">
                     정답: {question.correct_answer}
                   </p>
+                  {question.question_image_url && (
+                    <div className="mt-2">
+                      <img
+                        src={question.question_image_url}
+                        alt="문제 이미지"
+                        className="w-32 h-20 object-cover rounded border cursor-pointer hover:opacity-80"
+                        onClick={() => window.open(question.question_image_url, '_blank')}
+                        title="클릭하여 크게 보기"
+                      />
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge variant="outline">{question.difficulty}</Badge>
                   <Badge variant="secondary">{question.points}점</Badge>
                   {session?.status === "active" &&
                     session?.phase === "waiting" &&
@@ -548,6 +687,22 @@ export function ScoreStealAdmin({
               </div>
             ))}
           </div>
+
+          {questions.length === 0 && (
+            <div className="text-center py-8">
+              <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-lg font-semibold mb-2">점수뺏기 문제가 없습니다</h3>
+              <p className="text-muted-foreground mb-4">
+                중앙 문제 관리에서 점수뺏기 카테고리에 문제를 추가해주세요.
+              </p>
+              <Button
+                onClick={() => window.open('/admin/questions', '_blank')}
+                variant="outline"
+              >
+                중앙 문제 관리로 이동
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

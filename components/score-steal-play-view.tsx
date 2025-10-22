@@ -28,10 +28,13 @@ import {
   Zap,
   Shield,
   Sword,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import {
   submitAnswerForRace,
   getScoreStealSessionDetails,
+  getScoreStealSessionStatus,
   getSessionAttempts,
   getAvailableTargets,
   getProtectedTeams,
@@ -39,12 +42,14 @@ import {
 } from "@/lib/score-steal-actions";
 import { useToast } from "@/components/ui/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { supabase } from "@/lib/supabase";
 
 interface Team {
   id: string;
   team_name: string;
   team_number: number;
   score: number;
+  bracket?: 'higher' | 'lower' | null;
 }
 
 interface ScoreStealPlayViewProps {
@@ -71,54 +76,172 @@ export function ScoreStealPlayView({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [myAttempt, setMyAttempt] = useState<any>(null);
+  const [sseConnected, setSseConnected] = useState(false);
   const { toast } = useToast();
 
-  // Load session details
+  // 단순하고 확실한 데이터 로딩
   const loadSessionData = useCallback(async () => {
-    const [sessionRes, teamsRes, protectedRes, attemptsRes] = await Promise.all([
-      getScoreStealSessionDetails(sessionId),
-      getAvailableTargets(gameId),
-      getProtectedTeams(gameId, currentRound),
-      getSessionAttempts(sessionId),
-    ]);
-
-    if (sessionRes.success && sessionRes.session) {
-      setSession(sessionRes.session);
-    }
-
-    if (teamsRes.success) {
-      setTeams(teamsRes.teams.filter((t: Team) => t.id !== teamId));
-    }
-
-    if (protectedRes.success) {
-      setProtectedTeams(protectedRes.protectedTeams.map((p: any) => p.team_id));
-    }
-
-    if (attemptsRes.success) {
-      setAttempts(attemptsRes.attempts);
+    const timestamp = new Date().toLocaleTimeString();
+    
+    try {
+      console.log(`📥 [${timestamp}] Loading session data...`);
       
-      // Check if my team submitted
-      const myTeamAttempt = attemptsRes.attempts.find(
-        (a: any) => a.team_id === teamId
-      );
-      if (myTeamAttempt) {
-        setHasSubmitted(true);
-        setMyAttempt(myTeamAttempt);
+      // 1. 세션 데이터 로드
+      const sessionRes = await getScoreStealSessionDetails(sessionId);
+      
+      if (sessionRes.success && sessionRes.session) {
+        console.log(`📊 [${timestamp}] Session state:`, {
+          id: sessionRes.session.id,
+          phase: sessionRes.session.phase,
+          status: sessionRes.session.status,
+          current_question_id: sessionRes.session.current_question_id,
+          has_question_data: !!sessionRes.session.score_steal_questions,
+          question_title: sessionRes.session.score_steal_questions?.title,
+          question_image: sessionRes.session.score_steal_questions?.question_image_url,
+          broadcast_at: sessionRes.session.question_broadcast_at
+        });
+        
+        // 세션 상태 업데이트
+        setSession(sessionRes.session);
+      } else {
+        console.error(`❌ [${timestamp}] Session load failed:`, sessionRes.error);
+        return;
       }
+
+      // 2. 팀 데이터 로드
+      const teamsRes = await getAvailableTargets(gameId);
+      if (teamsRes.success && teamsRes.teams) {
+        const myTeam = teamsRes.teams.find((t: any) => t.id === teamId);
+        const myBracket = myTeam?.bracket;
+        
+        const filteredTeams = teamsRes.teams.filter((t: any) => {
+          if (!myBracket) return true;
+          return t.bracket === myBracket;
+        });
+        
+        console.log(`👥 [${timestamp}] Teams: ${filteredTeams.length} loaded`);
+        setTeams(filteredTeams);
+      }
+
+      // 3. 보호된 팀 로드
+      const protectedRes = await getProtectedTeams(gameId, currentRound);
+      if (protectedRes.success) {
+        setProtectedTeams(protectedRes.protectedTeams.map((p: any) => p.team_id));
+      }
+
+      // 4. 시도 기록 로드
+      const attemptsRes = await getSessionAttempts(sessionId);
+      if (attemptsRes.success) {
+        console.log(`🎯 [${timestamp}] Attempts: ${attemptsRes.attempts.length} loaded`);
+        setAttempts(attemptsRes.attempts);
+        
+        // 내 팀의 제출 여부 확인
+        const myTeamAttempt = attemptsRes.attempts.find(
+          (a: any) => a.team_id === teamId
+        );
+        if (myTeamAttempt) {
+          console.log(`✅ [${timestamp}] My team submitted:`, myTeamAttempt);
+          setHasSubmitted(true);
+          setMyAttempt(myTeamAttempt);
+        } else {
+          setHasSubmitted(false);
+          setMyAttempt(null);
+        }
+      }
+      
+      console.log(`✅ [${timestamp}] All data loaded successfully`);
+      
+    } catch (error) {
+      console.error(`❌ [${timestamp}] Load session data error:`, error);
     }
   }, [sessionId, gameId, currentRound, teamId]);
+
+  // 단순하고 확실한 실시간 업데이트 (매번 전체 로드)
+  useEffect(() => {
+    setSseConnected(true);
+    let pollCount = 0;
+    
+    console.log(`🔧 Starting simple polling for session: ${sessionId}`);
+    
+    const poll = async () => {
+      pollCount++;
+      const timestamp = new Date().toLocaleTimeString();
+      
+      console.log(`🔄 [${timestamp}] Poll #${pollCount} - Loading all data...`);
+      
+      try {
+        // 매번 전체 데이터를 새로 로드 (가장 확실한 방법)
+        await loadSessionData();
+        
+        console.log(`✅ [${timestamp}] Poll #${pollCount} completed successfully`);
+      } catch (error) {
+        console.error(`❌ [${timestamp}] Poll #${pollCount} failed:`, error);
+      }
+    };
+    
+    // 즉시 한 번 실행
+    poll();
+    
+    // 2초마다 폴링 (단순하고 확실함)
+    const interval = setInterval(poll, 2000);
+
+    return () => {
+      console.log(`🔌 Stopping polling for session: ${sessionId}`);
+      clearInterval(interval);
+    };
+  }, [sessionId, loadSessionData]);
+
+  // Monitor game round changes and redirect to next game
+  useEffect(() => {
+    let isMounted = true;
+    
+    const checkGameRound = async () => {
+      try {
+        const { data: gameData } = await supabase
+          .from("games")
+          .select("current_round, status")
+          .eq("id", gameId)
+          .single();
+        
+        if (!isMounted || !gameData) return;
+        
+        // If game round changed from 2, redirect to appropriate game
+        if (gameData.current_round !== 2 && gameData.status === "started") {
+          console.log(`🎮 Game round changed to ${gameData.current_round}, redirecting...`);
+          
+          if (gameData.current_round === 3) {
+            console.log(`🚀 Redirecting to relay-quiz...`);
+            window.location.href = `/game/${gameId}/relay-quiz?participant=${participantId}`;
+          }
+        }
+      } catch (error) {
+        console.error("❌ Failed to check game round:", error);
+      }
+    };
+    
+    // Check immediately
+    checkGameRound();
+    
+    // Poll every 2 seconds
+    const roundCheckInterval = setInterval(() => {
+      if (isMounted) {
+        checkGameRound();
+      }
+    }, 2000);
+    
+    return () => {
+      isMounted = false;
+      clearInterval(roundCheckInterval);
+    };
+  }, [gameId, participantId]);
 
   useEffect(() => {
     loadSessionData();
   }, [loadSessionData]);
 
-  // Poll for updates every 1 second
+  // 초기 데이터 로드
   useEffect(() => {
-    const interval = setInterval(() => {
-      loadSessionData();
-    }, 1000);
-
-    return () => clearInterval(interval);
+    loadSessionData();
   }, [loadSessionData]);
 
   const handleSubmitAnswer = async () => {
@@ -135,12 +258,8 @@ export function ScoreStealPlayView({
     try {
       const result = await submitAnswerForRace(
         sessionId,
-        gameId,
-        currentRound,
         teamId,
-        session.score_steal_questions.id,
         answer.trim(),
-        session.score_steal_questions.correct_answer,
         session.question_broadcast_at
       );
 
@@ -193,12 +312,7 @@ export function ScoreStealPlayView({
     try {
       const result = await executeScoreSteal(
         sessionId,
-        gameId,
-        currentRound,
-        teamId,
-        selectedTarget,
-        session.score_steal_questions.id,
-        session.score_steal_questions.points
+        selectedTarget
       );
 
       if (result.success) {
@@ -231,6 +345,16 @@ export function ScoreStealPlayView({
   const isWinner = winnerAttempt?.team_id === teamId;
   const correctAttempts = attempts.filter((a) => a.is_correct);
 
+  // Debug logging
+  console.log('🔍 Session data:', {
+    session,
+    phase: session?.phase,
+    hasQuestion: !!session?.score_steal_questions,
+    questionData: session?.score_steal_questions,
+    hasSubmitted,
+    myAttempt
+  });
+
   // Phase rendering
   if (!session) {
     return (
@@ -256,6 +380,12 @@ export function ScoreStealPlayView({
             <CardTitle className="flex items-center gap-2">
               <Sword className="h-5 w-5" />
               점수 뺏기 게임
+              <div className="ml-auto flex items-center gap-2">
+                <Badge variant="default" className="flex items-center gap-1">
+                  <Wifi className="h-3 w-3" />
+                  실시간 업데이트
+                </Badge>
+              </div>
             </CardTitle>
             <CardDescription>라운드 {currentRound}</CardDescription>
           </CardHeader>
@@ -263,7 +393,7 @@ export function ScoreStealPlayView({
             <Alert>
               <Clock className="h-4 w-4" />
               <AlertDescription>
-                관리자가 문제를 공개할 때까지 기다려주세요...
+                관리자가 문제를 공개할 때까지 기다려주세요... (실시간 업데이트 활성화됨)
               </AlertDescription>
             </Alert>
           </CardContent>
@@ -282,12 +412,14 @@ export function ScoreStealPlayView({
               {sortedTeams.map((team, index) => (
                 <div
                   key={team.id}
-                  className={`flex items-center justify-between p-3 rounded-lg ${
-                    index === 0 ? "bg-yellow-50 border-yellow-200" : "bg-muted/50"
+                  className={`flex items-center justify-between p-3 rounded-lg border ${
+                    index === 0 
+                      ? "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700" 
+                      : "bg-muted/50 border-transparent"
                   } ${team.id === teamId ? "ring-2 ring-primary" : ""}`}
                 >
                   <div className="flex items-center gap-3">
-                    {index === 0 && <Trophy className="h-5 w-5 text-yellow-500" />}
+                    {index === 0 && <Trophy className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />}
                     <span className="font-medium text-lg">#{index + 1}</span>
                     <span className="font-medium">{team.team_name}</span>
                     {team.id === teamId && <Badge>우리 팀</Badge>}
@@ -325,12 +457,31 @@ export function ScoreStealPlayView({
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="p-4 bg-muted/50 rounded-lg">
-              <h4 className="font-medium mb-2">문제:</h4>
-              <p className="text-lg">{session.score_steal_questions?.question_text}</p>
-              <div className="flex gap-2 mt-3">
-                <Badge variant="outline">
-                  {session.score_steal_questions?.difficulty}
-                </Badge>
+              {session.score_steal_questions?.question_image_url ? (
+                <>
+                  <h4 className="font-medium mb-3 text-center">문제:</h4>
+                  <div className="mb-4 flex justify-center">
+                    <img
+                      src={session.score_steal_questions.question_image_url}
+                      alt="문제 이미지"
+                      className="max-w-full max-h-96 rounded-lg border-2 border-border shadow-lg object-contain"
+                      onError={(e) => {
+                        console.error('이미지 로드 실패:', session.score_steal_questions.question_image_url);
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  </div>
+                  {session.score_steal_questions?.title && (
+                    <p className="text-lg text-center mt-2">{session.score_steal_questions.title}</p>
+                  )}
+                </>
+              ) : (
+                <>
+                  <h4 className="font-medium mb-2">문제:</h4>
+                  <p className="text-lg">{session.score_steal_questions?.title || '문제를 불러오는 중...'}</p>
+                </>
+              )}
+              <div className="flex gap-2 mt-3 justify-center">
                 <Badge variant="secondary">
                   {session.score_steal_questions?.points}점
                 </Badge>
@@ -551,15 +702,15 @@ export function ScoreStealPlayView({
                 {correctAttempts.map((attempt, index) => (
                   <div
                     key={attempt.id}
-                    className={`flex items-center justify-between p-3 rounded-lg ${
+                    className={`flex items-center justify-between p-3 rounded-lg border ${
                       attempt.is_winner
-                        ? "bg-yellow-50 border-yellow-200"
-                        : "bg-muted/50"
+                        ? "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700"
+                        : "bg-muted/50 border-transparent"
                     }`}
                   >
                     <div className="flex items-center gap-3">
                       {attempt.is_winner && (
-                        <Trophy className="h-5 w-5 text-yellow-500" />
+                        <Trophy className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />
                       )}
                       <span className="font-medium">#{index + 1}</span>
                       <span>{attempt.teams?.team_name}</span>
@@ -614,12 +765,14 @@ export function ScoreStealPlayView({
               {sortedTeams.map((team, index) => (
                 <div
                   key={team.id}
-                  className={`flex items-center justify-between p-3 rounded-lg ${
-                    index === 0 ? "bg-yellow-50 border-yellow-200" : "bg-muted/50"
+                  className={`flex items-center justify-between p-3 rounded-lg border ${
+                    index === 0 
+                      ? "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700" 
+                      : "bg-muted/50 border-transparent"
                   } ${team.id === teamId ? "ring-2 ring-primary" : ""}`}
                 >
                   <div className="flex items-center gap-3">
-                    {index === 0 && <Trophy className="h-5 w-5 text-yellow-500" />}
+                    {index === 0 && <Trophy className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />}
                     <span className="font-medium text-lg">#{index + 1}</span>
                     <span className="font-medium">{team.team_name}</span>
                     {team.id === teamId && <Badge>우리 팀</Badge>}

@@ -79,6 +79,45 @@ export function RelayQuizPlayView({
   const [currentMemberIndex, setCurrentMemberIndex] = useState(0);
   const { toast } = useToast();
 
+  // Monitor game round changes (Relay Quiz is final round, so just log)
+  useEffect(() => {
+    let isMounted = true;
+    
+    const checkGameRound = async () => {
+      try {
+        const { data: gameData } = await supabase
+          .from("games")
+          .select("current_round, status")
+          .eq("id", gameId)
+          .single();
+        
+        if (!isMounted || !gameData) return;
+        
+        // If game round changed from 3, something is wrong
+        if (gameData.current_round !== 3 && gameData.status === "started") {
+          console.log(`⚠️ Unexpected: Game round changed to ${gameData.current_round} during Relay Quiz`);
+        }
+      } catch (error) {
+        console.error("❌ Failed to check game round:", error);
+      }
+    };
+    
+    // Check immediately
+    checkGameRound();
+    
+    // Poll every 2 seconds
+    const roundCheckInterval = setInterval(() => {
+      if (isMounted) {
+        checkGameRound();
+      }
+    }, 2000);
+    
+    return () => {
+      isMounted = false;
+      clearInterval(roundCheckInterval);
+    };
+  }, [gameId]);
+
   // Load initial data
   useEffect(() => {
     const loadData = async () => {

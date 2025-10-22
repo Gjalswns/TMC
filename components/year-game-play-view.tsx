@@ -22,7 +22,6 @@ import {
   AlertCircle,
   Trophy,
   Users,
-  ArrowLeft,
 } from "lucide-react";
 import { YearGameCalculator } from "./year-game-calculator";
 import {
@@ -34,7 +33,7 @@ import {
 import { generateExampleExpressions } from "@/lib/year-game-utils";
 import { useToast } from "@/components/ui/use-toast";
 import { useRouter } from "next/navigation";
-import { type Database } from "@/lib/supabase";
+import { type Database, supabase } from "@/lib/supabase";
 // Realtime imports removed - using polling instead for stability
 // import {
 //   useGameUpdates,
@@ -106,10 +105,60 @@ export function YearGamePlayView({
     }
   }, [participant?.team_id, teams]);
 
-  // Load active session with aggressive polling
+  // Monitor game round changes and redirect to next game
   useEffect(() => {
     let isMounted = true;
-    let sessionFound = false;
+    
+    const checkGameRound = async () => {
+      try {
+        const { data: gameData } = await supabase
+          .from("games")
+          .select("current_round, status")
+          .eq("id", game.id)
+          .single();
+        
+        if (!isMounted || !gameData) return;
+        
+        // If game round changed from 1, redirect to appropriate game
+        if (gameData.current_round !== 1 && gameData.status === "started") {
+          console.log(`🎮 Game round changed to ${gameData.current_round}, redirecting...`);
+          
+          let targetRoute = "";
+          if (gameData.current_round === 2) {
+            targetRoute = "score-steal";
+          } else if (gameData.current_round === 3) {
+            targetRoute = "relay-quiz";
+          }
+          
+          if (targetRoute) {
+            console.log(`🚀 Redirecting to ${targetRoute}...`);
+            window.location.href = `/game/${game.id}/${targetRoute}?participant=${participant.id}`;
+          }
+        }
+      } catch (error) {
+        console.error("❌ Failed to check game round:", error);
+      }
+    };
+    
+    // Check immediately
+    checkGameRound();
+    
+    // Poll every 2 seconds
+    const roundCheckInterval = setInterval(() => {
+      if (isMounted) {
+        checkGameRound();
+      }
+    }, 2000);
+    
+    return () => {
+      isMounted = false;
+      clearInterval(roundCheckInterval);
+    };
+  }, [game.id, participant.id]);
+
+  // Load active session with continuous polling for status updates
+  useEffect(() => {
+    let isMounted = true;
     
     const loadSession = async () => {
       try {
@@ -118,16 +167,17 @@ export function YearGamePlayView({
         if (!isMounted) return;
         
         if (response.success && response.session) {
-          console.log("✅ Loaded active Year Game session:", response.session);
+          console.log("✅ Loaded Year Game session:", response.session);
           setSession(response.session);
-          sessionFound = true;
           setLoading(false);
         } else {
-          console.log("⚠️ No active session found, will keep trying...");
+          console.log("⚠️ No active session found");
+          setSession(null);
+          setLoading(false);
         }
       } catch (error) {
         console.error("❌ Failed to load session:", error);
-        if (isMounted && sessionFound) {
+        if (isMounted) {
           toast({
             title: "오류",
             description: "세션 로드 중 오류가 발생했습니다",
@@ -140,28 +190,17 @@ export function YearGamePlayView({
     // 즉시 로드
     loadSession();
     
-    // 세션을 찾을 때까지 계속 폴링 (500ms 간격)
+    // 지속적으로 세션 상태 폴링 (2초 간격)
     const sessionPollInterval = setInterval(() => {
-      if (!sessionFound && isMounted) {
-        console.log("🔄 Polling for Year Game session...");
+      if (isMounted) {
+        console.log("🔄 Polling for Year Game session status...");
         loadSession();
-      } else {
-        clearInterval(sessionPollInterval);
       }
-    }, 500);
-    
-    // 10초 후에는 로딩 상태 해제 (타임아웃)
-    const loadingTimeout = setTimeout(() => {
-      if (isMounted && !sessionFound) {
-        console.log("⏰ Session loading timeout");
-        setLoading(false);
-      }
-    }, 10000);
+    }, 2000);
     
     return () => {
       isMounted = false;
       clearInterval(sessionPollInterval);
-      clearTimeout(loadingTimeout);
     };
   }, [game.id]);
 
@@ -188,6 +227,18 @@ export function YearGamePlayView({
       return () => clearInterval(timer);
     }
   }, [session?.status, session?.started_at, session?.time_limit_seconds]);
+
+  // Auto-redirect to waiting room when game finishes
+  useEffect(() => {
+    if (session?.status === "finished") {
+      const redirectTimer = setTimeout(() => {
+        console.log("🎮 Year Game finished, redirecting to waiting room for next game");
+        router.push(`/game/${game.id}/waiting-room?participant=${participant.id}`);
+      }, 3000); // 3초 후 자동 리다이렉트
+
+      return () => clearTimeout(redirectTimer);
+    }
+  }, [session?.status, game.id, participant.id, router]);
 
   // Load team results and attempts with aggressive polling for real-time updates
   useEffect(() => {
@@ -253,12 +304,12 @@ export function YearGamePlayView({
     // Initial load
     loadData();
     
-    // Ultra-fast polling for real-time feel (500ms for immediate updates)
+    // Optimized polling for AWS EC2 (2초로 조정하여 서버 부하 감소)
     const refreshInterval = setInterval(() => {
       if (errorCount < MAX_ERRORS) {
         loadData();
       }
-    }, 500); // 500ms로 더 빠르게
+    }, 2000); // 2초로 조정 (서버 부하 감소)
     
     return () => {
       isMounted = false;
@@ -329,7 +380,7 @@ export function YearGamePlayView({
               setRecentAttempts(attemptsResponse.attempts);
             }
 
-            // 500ms 후 두 번째 시도 (확실히 반영되도록)
+            // 1초 후 두 번째 시도 (확실히 반영되도록, 서버 부하 고려)
             setTimeout(async () => {
               const resultResponse2 = await getYearGameTeamResults(session.id, myTeam.id);
               if (resultResponse2.success && resultResponse2.result) {
@@ -340,7 +391,7 @@ export function YearGamePlayView({
               if (attemptsResponse2.success && attemptsResponse2.attempts) {
                 setRecentAttempts(attemptsResponse2.attempts);
               }
-            }, 500);
+            }, 1000);
           };
           
           // 즉시 새로고침 (비동기)
@@ -356,7 +407,7 @@ export function YearGamePlayView({
           // 구체적인 유효성 오류 메시지
           toast({
             title: "❌ Invalid Expression!",
-            description: `Expression validation failed. Check: All 4 numbers used exactly once, no extra numbers, valid syntax. Your numbers: ${session.target_numbers.join(", ")}`,
+            description: `Expression validation failed. Check: All 5 numbers used exactly once, no extra numbers, valid syntax. Your numbers: ${session.target_numbers.join(", ")}`,
             variant: "destructive",
           });
         } else if (response.attempt.isCorrect && !response.isNewNumber) {
@@ -530,7 +581,7 @@ export function YearGamePlayView({
                 <p className="text-sm text-muted-foreground">
                   {isGameStarted 
                     ? "Please wait while we prepare your mathematical challenge..." 
-                    : "Get ready! You'll need to create math expressions using 4 numbers."
+                    : "Get ready! You'll need to create math expressions using 5 numbers."
                   }
                 </p>
               </div>
@@ -544,21 +595,6 @@ export function YearGamePlayView({
                 </div>
                 <span className="text-sm text-muted-foreground">Checking for updates...</span>
               </div>
-
-              {/* Back button */}
-              <Button
-                onClick={() =>
-                  router.push(
-                    `/game/${game.id}/select?participant=${participant.id}`
-                  )
-                }
-                variant="outline"
-                size="lg"
-                className="mt-4"
-              >
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Game Selection
-              </Button>
             </CardContent>
           </Card>
         </div>
@@ -608,39 +644,66 @@ export function YearGamePlayView({
           </Card>
         )}
 
-        {/* Target Numbers */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Target className="h-5 w-5" />
-              Your Team's Numbers
-            </CardTitle>
-            <CardDescription>
-              Use ALL 4 numbers exactly once each to make expressions. Operations allowed: +, -, ×, ÷, ^, nPr, nCr
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-4 justify-center">
-              {session.target_numbers.map((num: number, index: number) => (
-                <div
-                  key={index}
-                  className="w-16 h-16 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-2xl font-bold"
-                >
-                  {num}
+        {/* Target Numbers - Only show when game is active */}
+        {session.status === "active" && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Target className="h-5 w-5" />
+                Your Team's Numbers
+              </CardTitle>
+              <CardDescription>
+                Use ALL 5 numbers exactly once each to make expressions. Operations allowed: +, -, ×, ÷, ^, nPr, nCr
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex gap-4 justify-center">
+                {session.target_numbers.map((num: number, index: number) => (
+                  <div
+                    key={index}
+                    className="w-16 h-16 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-2xl font-bold"
+                  >
+                    {num}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 text-center">
+                <Alert>
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    <strong>Important:</strong> You must use all 5 numbers in your expression. 
+                    Each number can only be used once.
+                  </AlertDescription>
+                </Alert>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Waiting Message - Show when session exists but not active */}
+        {session.status === "waiting" && (
+          <Card className="text-center">
+            <CardContent className="p-8">
+              <div className="space-y-4">
+                <div className="w-16 h-16 bg-orange-500 rounded-full flex items-center justify-center mx-auto animate-pulse">
+                  <Clock className="h-8 w-8 text-white" />
                 </div>
-              ))}
-            </div>
-            <div className="mt-4 text-center">
-              <Alert>
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  <strong>Important:</strong> You must use all 4 numbers in your expression. 
-                  Each number can only be used once.
-                </AlertDescription>
-              </Alert>
-            </div>
-          </CardContent>
-        </Card>
+                <div>
+                  <h3 className="text-xl font-bold text-orange-600">게임 시작 대기 중</h3>
+                  <p className="text-muted-foreground mt-2">
+                    선생님이 게임을 시작할 때까지 기다려주세요
+                  </p>
+                </div>
+                <div className="bg-muted/50 rounded-lg p-4">
+                  <p className="text-sm text-muted-foreground">
+                    💡 게임이 시작되면 5개의 숫자가 주어집니다.<br/>
+                    모든 숫자를 정확히 한 번씩 사용하여 1~100 사이의 수를 만드세요!
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* 모바일 친화적 계산기 */}
         {session.status === "active" && (
@@ -759,20 +822,7 @@ export function YearGamePlayView({
           </Alert>
         )}
 
-        {/* Back Button */}
-        <div className="text-center">
-          <Button
-            onClick={() =>
-              router.push(
-                `/game/${game.id}/select?participant=${participant.id}`
-              )
-            }
-            variant="outline"
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Game Selection
-          </Button>
-        </div>
+
       </div>
     </div>
   );

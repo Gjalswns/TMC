@@ -1,10 +1,10 @@
 /**
  * Year Game utility functions for mathematical expression evaluation
- * New rules: Teams choose 4 numbers, must use ALL numbers with basic operations, nPr, nCr, exponents
+ * New rules: Teams choose 5 numbers, must use ALL numbers with basic operations, nPr, nCr, exponents
  */
 
 export interface YearGameConfig {
-  targetNumbers: number[]; // 4 numbers chosen by team (0-9)
+  targetNumbers: number[]; // 5 numbers chosen by team (0-9)
   timeLimit: number; // in seconds
   validRange: { min: number; max: number }; // valid result range (1-100)
 }
@@ -21,17 +21,24 @@ export interface YearGameAttempt {
 }
 
 /**
- * Generate 4 random numbers between 0-9 for the game (fallback)
- * Teams will choose their own numbers in the new system
+ * Generate 5 random numbers with specific ranges for balanced gameplay
+ * 새로운 규칙: 0~1, 2~3, 4~5, 6~7, 8~9 범위에서 각각 하나씩
  */
 export function generateTargetNumbers(): number[] {
+  const ranges = [
+    [0, 1],        // 범위 1: 0~1
+    [2, 3],        // 범위 2: 2~3
+    [4, 5],        // 범위 3: 4~5
+    [6, 7],        // 범위 4: 6~7
+    [8, 9]         // 범위 5: 8~9
+  ];
+  
   const numbers: number[] = [];
-  while (numbers.length < 4) {
-    const num = Math.floor(Math.random() * 10);
-    if (!numbers.includes(num)) {
-      numbers.push(num);
-    }
-  }
+  ranges.forEach(range => {
+    const randomIndex = Math.floor(Math.random() * range.length);
+    numbers.push(range[randomIndex]);
+  });
+  
   return numbers.sort((a, b) => a - b);
 }
 
@@ -311,50 +318,43 @@ export function calculateScore(numbersFound: number[]): number {
 }
 
 /**
- * Generate example expressions using ALL 4 numbers (1~100 범위)
+ * Generate example expressions using ALL 5 numbers (1~100 범위)
  */
 export function generateExampleExpressions(targetNumbers: number[]): string[] {
-  const [a, b, c, d] = targetNumbers;
+  const [a, b, c, d, e] = targetNumbers;
   const examples: string[] = [];
 
-  // Examples using all 4 numbers with basic operations
-  const sum = a + b + c + d;
-  if (sum >= 1 && sum <= 100) examples.push(`${a} + ${b} + ${c} + ${d} = ${sum}`);
+  // Examples using all 5 numbers with basic operations
+  const sum = a + b + c + d + e;
+  if (sum >= 1 && sum <= 100) examples.push(`${a} + ${b} + ${c} + ${d} + ${e} = ${sum}`);
 
-  // Multiplication examples
-  const product = a * b * c * d;
-  if (product >= 1 && product <= 100) examples.push(`${a} × ${b} × ${c} × ${d} = ${product}`);
+  // Mixed operations with 5 numbers
+  const mixed1 = a + b * c - d + e;
+  if (mixed1 >= 1 && mixed1 <= 100) examples.push(`${a} + ${b} × ${c} - ${d} + ${e} = ${mixed1}`);
 
-  // Mixed operations
-  const mixed1 = a + b * c - d;
-  if (mixed1 >= 1 && mixed1 <= 100) examples.push(`${a} + ${b} × ${c} - ${d} = ${mixed1}`);
-
-  const mixed2 = a * b + c + d;
-  if (mixed2 >= 1 && mixed2 <= 100) examples.push(`${a} × ${b} + ${c} + ${d} = ${mixed2}`);
+  const mixed2 = a * b + c + d - e;
+  if (mixed2 >= 1 && mixed2 <= 100) examples.push(`${a} × ${b} + ${c} + ${d} - ${e} = ${mixed2}`);
 
   // Examples with parentheses
-  const paren1 = (a + b) * (c + d);
-  if (paren1 >= 1 && paren1 <= 100) examples.push(`(${a} + ${b}) × (${c} + ${d}) = ${paren1}`);
+  const paren1 = (a + b) * c + d - e;
+  if (paren1 >= 1 && paren1 <= 100) examples.push(`(${a} + ${b}) × ${c} + ${d} - ${e} = ${paren1}`);
 
-  const paren2 = a * (b + c) - d;
-  if (paren2 >= 1 && paren2 <= 100) examples.push(`${a} × (${b} + ${c}) - ${d} = ${paren2}`);
+  const paren2 = a * (b + c) - d + e;
+  if (paren2 >= 1 && paren2 <= 100) examples.push(`${a} × (${b} + ${c}) - ${d} + ${e} = ${paren2}`);
 
-  // Examples with exponents (if numbers are small)
-  if (a <= 3 && b <= 3 && c <= 3 && d <= 3) {
-    const exp1 = Math.pow(a, b) + c + d;
-    if (exp1 >= 1 && exp1 <= 100) examples.push(`${a}^${b} + ${c} + ${d} = ${exp1}`);
-  }
+  // Examples with division
+  const div1 = (a * b * c + d) / e;
+  if (Number.isInteger(div1) && div1 >= 1 && div1 <= 100) examples.push(`(${a} × ${b} × ${c} + ${d}) ÷ ${e} = ${div1}`);
 
-  // Examples with subtraction
-  const sub1 = a * b * c - d;
-  if (sub1 >= 1 && sub1 <= 100) examples.push(`${a} × ${b} × ${c} - ${d} = ${sub1}`);
+  // More complex examples
+  const complex1 = a * b + c * d - e;
+  if (complex1 >= 1 && complex1 <= 100) examples.push(`${a} × ${b} + ${c} × ${d} - ${e} = ${complex1}`);
 
-  // More complex examples for higher numbers
-  const complex1 = a * b + c * d;
-  if (complex1 >= 1 && complex1 <= 100) examples.push(`${a} × ${b} + ${c} × ${d} = ${complex1}`);
+  const complex2 = (a + b) * (c - d) + e;
+  if (complex2 >= 1 && complex2 <= 100) examples.push(`(${a} + ${b}) × (${c} - ${d}) + ${e} = ${complex2}`);
 
-  const complex2 = (a + b) * c + d;
-  if (complex2 >= 1 && complex2 <= 100) examples.push(`(${a} + ${b}) × ${c} + ${d} = ${complex2}`);
+  const complex3 = a + b + c * d - e;
+  if (complex3 >= 1 && complex3 <= 100) examples.push(`${a} + ${b} + ${c} × ${d} - ${e} = ${complex3}`);
 
   return examples.slice(0, 8); // Return up to 8 examples
 }

@@ -18,28 +18,30 @@ export async function createScoreStealSession(
   roundNumber: number
 ) {
   try {
-    console.log(`🎮 Creating Score Steal realtime session for game ${gameId}, round ${roundNumber}`);
+    console.log(`🎮 Creating Score Steal session for game ${gameId}, round ${roundNumber}`);
 
-    // 새로운 데이터베이스 함수 호출
-    const { data, error } = await supabase.rpc('start_score_steal_realtime_session', {
-      p_game_id: gameId,
-      p_round_number: roundNumber
-    });
+    // 직접 세션 생성
+    const { data: session, error } = await supabase
+      .from("score_steal_sessions")
+      .insert({
+        game_id: gameId,
+        round_number: roundNumber,
+        status: "waiting",
+        phase: "waiting",
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
 
     if (error) throw error;
 
-    const result = data?.[0];
-    if (!result?.success) {
-      throw new Error(result?.message || 'Failed to create session');
-    }
-
-    console.log(`✅ Score Steal realtime session created: ${result.session_id}`);
+    console.log(`✅ Score Steal session created: ${session.id}`);
     
     revalidatePath(`/admin/game/${gameId}`);
     return { 
       success: true, 
-      sessionId: result.session_id,
-      message: result.message
+      sessionId: session.id,
+      message: "Score Steal session created successfully"
     };
   } catch (error) {
     console.error("❌ Error creating Score Steal session:", error);
@@ -77,10 +79,22 @@ export async function startScoreStealSession(sessionId: string) {
 }
 
 /**
- * End a Score Steal Game session
+ * End a Score Steal Game session and optionally advance to next round
  */
-export async function endScoreStealSession(sessionId: string) {
+export async function endScoreStealSession(sessionId: string, advanceToNextRound: boolean = false) {
   try {
+    // Get session info to find game_id
+    const { data: session, error: sessionError } = await supabase
+      .from("score_steal_sessions")
+      .select("game_id, round_number")
+      .eq("id", sessionId)
+      .single();
+
+    if (sessionError || !session) {
+      throw new Error("Session not found");
+    }
+
+    // Update session status to finished
     const { error } = await supabase
       .from("score_steal_sessions")
       .update({
@@ -90,6 +104,51 @@ export async function endScoreStealSession(sessionId: string) {
       .eq("id", sessionId);
 
     if (error) throw error;
+
+    // If advanceToNextRound is true, move to next round
+    if (advanceToNextRound) {
+      const { data: game, error: gameError } = await supabase
+        .from("games")
+        .select("current_round, total_rounds")
+        .eq("id", session.game_id)
+        .single();
+
+      if (gameError || !game) {
+        console.error("Failed to get game info:", gameError);
+      } else {
+        const nextRoundNumber = game.current_round + 1;
+        
+        // Only advance if not at final round
+        if (nextRoundNumber <= game.total_rounds) {
+          const { error: updateError } = await supabase
+            .from("games")
+            .update({ current_round: nextRoundNumber })
+            .eq("id", session.game_id);
+
+          if (updateError) {
+            console.error("Failed to advance round:", updateError);
+          } else {
+            console.log(`✅ Advanced to round ${nextRoundNumber}`);
+            
+            // Create appropriate session for the new round
+            if (nextRoundNumber === 2) {
+              // Create Score Steal session for round 2
+              const scoreStealResult = await createScoreStealSession(session.game_id, nextRoundNumber);
+              if (!scoreStealResult.success) {
+                console.error("Failed to create Score Steal session:", scoreStealResult.error);
+              }
+            } else if (nextRoundNumber === 3 || nextRoundNumber === 4) {
+              // Create Relay Quiz session for rounds 3-4
+              const { createRelayQuizSession } = await import("./relay-quiz-actions");
+              const relayQuizResult = await createRelayQuizSession(session.game_id, nextRoundNumber);
+              if (!relayQuizResult.success) {
+                console.error("Failed to create Relay Quiz session:", relayQuizResult.error);
+              }
+            }
+          }
+        }
+      }
+    }
 
     revalidatePath("/admin");
     return { success: true };
@@ -222,7 +281,7 @@ export async function getAvailableTargets(gameId: string) {
   try {
     const { data: teams, error } = await supabase
       .from("teams")
-      .select("id, team_name, team_number, score")
+      .select("id, team_name, team_number, score, bracket")
       .eq("game_id", gameId)
       .order("score", { ascending: false });
 
@@ -323,34 +382,67 @@ export async function getScoreStealAttempts(
 }
 
 /**
- * Broadcast question to all teams (새로운 실시간 시스템)
+ * Broadcast question to all teams (중앙 문제 관리 시스템 사용)
  */
 export async function broadcastQuestion(
   sessionId: string,
   questionId: string
 ) {
   try {
-    console.log(`📡 Broadcasting question ${questionId} to session ${sessionId}`);
+    console.log(`📡 Broadcasting central question ${questionId} to session ${sessionId}`);
 
-    const { data, error } = await supabase.rpc("broadcast_score_steal_question", {
-      p_session_id: sessionId,
-      p_question_id: questionId,
-    });
+    // 중앙 문제 관리에서 문제 정보 가져오기
+    const { data: question, error: questionError } = await supabase
+      .from('central_questions')
+      .select('*')
+      .eq('id', questionId)
+      .single();
 
-    if (error) throw error;
-
-    const result = data?.[0];
-    if (!result?.success) {
-      throw new Error(result?.message || 'Failed to broadcast question');
+    if (questionError || !question) {
+      console.error('❌ Question not found:', questionError);
+      throw new Error('Question not found in central questions');
     }
 
-    console.log(`✅ Question broadcasted at: ${result.broadcast_at}`);
+    console.log('✅ Question found:', {
+      id: question.id,
+      title: question.title,
+      hasImage: !!question.question_image_url
+    });
+
+    const broadcastTime = new Date().toISOString();
+
+    // 세션에 현재 문제 설정 및 브로드캐스트 시간 기록
+    const { data: updatedSession, error: updateError } = await supabase
+      .from('score_steal_sessions')
+      .update({
+        current_question_id: questionId,
+        question_broadcast_at: broadcastTime,
+        phase: 'question_active',
+        status: 'active'
+      })
+      .eq('id', sessionId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('❌ Session update error:', updateError);
+      throw updateError;
+    }
+
+    console.log(`✅ Session updated successfully:`, {
+      sessionId: updatedSession.id,
+      phase: updatedSession.phase,
+      current_question_id: updatedSession.current_question_id,
+      broadcast_at: updatedSession.question_broadcast_at
+    });
 
     revalidatePath("/admin");
+    revalidatePath("/game");
+    
     return {
       success: true,
-      broadcastAt: result.broadcast_at,
-      message: result.message
+      broadcastAt: broadcastTime,
+      message: 'Question broadcasted successfully'
     };
   } catch (error) {
     console.error("❌ Error broadcasting question:", error);
@@ -362,7 +454,7 @@ export async function broadcastQuestion(
 }
 
 /**
- * Submit answer in realtime race mode (새로운 실시간 시스템)
+ * Submit answer in realtime race mode (중앙 문제 관리 시스템 사용)
  */
 export async function submitAnswerForRace(
   sessionId: string,
@@ -373,11 +465,12 @@ export async function submitAnswerForRace(
   try {
     console.log(`🏁 Realtime answer submission: team=${teamId}, answer="${answer}"`);
 
-    const { data, error } = await supabase.rpc("submit_score_steal_answer_realtime", {
+    // 새로운 중앙 문제 관리 시스템 함수 사용
+    const { data, error } = await supabase.rpc('submit_score_steal_answer_central', {
       p_session_id: sessionId,
       p_team_id: teamId,
       p_answer: answer,
-      p_broadcast_time: broadcastTime,
+      p_broadcast_time: broadcastTime
     });
 
     if (error) throw error;
@@ -397,7 +490,6 @@ export async function submitAnswerForRace(
       isCorrect: result.is_correct,
       isWinner: result.is_winner,
       responseTimeMs: result.response_time_ms,
-      inputShouldLock: result.input_should_lock,
       message: result.message
     };
   } catch (error) {
@@ -448,7 +540,7 @@ export async function determineWinner(sessionId: string) {
 }
 
 /**
- * Execute score steal with target selection (새로운 실시간 시스템)
+ * Execute score steal with target selection (중앙 문제 관리 시스템 사용)
  */
 export async function executeScoreSteal(
   sessionId: string,
@@ -457,7 +549,7 @@ export async function executeScoreSteal(
   try {
     console.log(`💰 Executing score steal: session=${sessionId} -> target=${targetTeamId}`);
 
-    const { data, error } = await supabase.rpc("execute_score_steal_with_target", {
+    const { data, error } = await supabase.rpc("execute_score_steal_central", {
       p_session_id: sessionId,
       p_target_team_id: targetTeamId,
     });
@@ -517,22 +609,40 @@ export async function getProtectedTeams(gameId: string, roundNumber: number) {
 }
 
 /**
- * Get current session with full details
+ * Get session status only (lightweight for polling)
+ */
+export async function getScoreStealSessionStatus(sessionId: string) {
+  try {
+    const { data: session, error } = await supabase
+      .from("score_steal_sessions")
+      .select("id, phase, status, current_question_id, question_broadcast_at, winner_team_id")
+      .eq("id", sessionId)
+      .single();
+
+    if (error) throw error;
+
+    return { success: true, session };
+  } catch (error) {
+    console.error("Error getting session status:", error);
+    return {
+      success: false,
+      error: (error as Error).message || "Failed to get session status",
+    };
+  }
+}
+
+/**
+ * Get current session with full details (중앙 문제 관리 시스템 사용)
  */
 export async function getScoreStealSessionDetails(sessionId: string) {
   try {
+    console.log(`🔍 Getting session details for: ${sessionId}`);
+    
     const { data: session, error } = await supabase
       .from("score_steal_sessions")
       .select(
         `
         *,
-        score_steal_questions!score_steal_sessions_current_question_id_fkey (
-          id,
-          question_text,
-          correct_answer,
-          difficulty,
-          points
-        ),
         teams!score_steal_sessions_winner_team_id_fkey (
           id,
           team_name,
@@ -545,9 +655,52 @@ export async function getScoreStealSessionDetails(sessionId: string) {
 
     if (error) throw error;
 
+    console.log(`📊 Session data:`, {
+      id: session.id,
+      phase: session.phase,
+      status: session.status,
+      current_question_id: session.current_question_id,
+      question_broadcast_at: session.question_broadcast_at
+    });
+
+    // 현재 문제가 있다면 중앙 문제 관리에서 가져오기
+    if (session.current_question_id) {
+      console.log(`🔍 Fetching question: ${session.current_question_id}`);
+      
+      const { data: question, error: questionError } = await supabase
+        .from('central_questions')
+        .select('id, title, question_image_url, correct_answer, points')
+        .eq('id', session.current_question_id)
+        .single();
+
+      if (questionError) {
+        console.error('❌ Question fetch error:', questionError);
+        console.error('❌ Error details:', JSON.stringify(questionError, null, 2));
+      } else if (question) {
+        console.log('✅ Question loaded:', {
+          id: question.id,
+          title: question.title,
+          hasImage: !!question.question_image_url,
+          imageUrl: question.question_image_url,
+          points: question.points
+        });
+        session.score_steal_questions = question;
+      } else {
+        console.warn('⚠️ No question data returned');
+      }
+    } else {
+      console.log('ℹ️ No current_question_id in session');
+    }
+
+    console.log('📦 Final session object:', {
+      hasSession: !!session,
+      hasQuestionData: !!session.score_steal_questions,
+      questionTitle: session.score_steal_questions?.title
+    });
+
     return { success: true, session };
   } catch (error) {
-    console.error("Error getting session details:", error);
+    console.error("❌ Error getting session details:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to get session details",
@@ -565,7 +718,12 @@ export async function getSessionAttempts(sessionId: string) {
       .select(
         `
         *,
-        teams (
+        teams!score_steal_attempts_team_id_fkey (
+          id,
+          team_name,
+          team_number
+        ),
+        target_team:teams!score_steal_attempts_target_team_id_fkey (
           id,
           team_name,
           team_number
