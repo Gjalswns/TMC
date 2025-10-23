@@ -118,44 +118,80 @@ export function RelayQuizPlayView({
     };
   }, [gameId]);
 
-  // Load initial data
+  // Load initial data and poll for session updates
   useEffect(() => {
+    let isMounted = true;
+    let pollInterval: NodeJS.Timeout | null = null;
+
     const loadData = async () => {
+      console.log("🔄 [Relay Quiz] Loading session data...");
+      
       // Get session
-      const { data: sessionData } = await supabase
+      const { data: sessionData, error: sessionError } = await supabase
         .from("relay_quiz_sessions")
         .select("*")
         .eq("game_id", gameId)
         .eq("round_number", currentRound)
         .single();
 
+      if (sessionError) {
+        console.error("❌ [Relay Quiz] Session error:", sessionError);
+      }
+
+      if (!isMounted) return;
+
       if (sessionData) {
+        console.log("✅ [Relay Quiz] Session loaded:", {
+          id: sessionData.id,
+          status: sessionData.status,
+          hasQuestions: !!sessionData.question_data
+        });
         setSession(sessionData);
+      } else {
+        console.log("⚠️ [Relay Quiz] No session found");
       }
 
       // Load team members
       const membersResult = await getTeamMembers(teamId);
-      if (membersResult.success) {
+      if (membersResult.success && membersResult.members && isMounted) {
         setTeamMembers(membersResult.members);
       }
 
       // Load current question
-      if (sessionData) {
+      if (sessionData && isMounted) {
         const questionResult = await getCurrentQuestionForTeam(
           sessionData.id,
           teamId
         );
         if (questionResult.success) {
           if (questionResult.isComplete) {
+            console.log("✅ [Relay Quiz] Team completed all questions");
             setIsComplete(true);
           } else {
+            console.log("📝 [Relay Quiz] Current question:", questionResult.question?.question_order);
             setCurrentQuestion(questionResult.question);
           }
         }
       }
     };
 
+    // Initial load
     loadData();
+
+    // Poll for session updates every 2 seconds
+    pollInterval = setInterval(() => {
+      if (isMounted) {
+        console.log("🔄 [Relay Quiz] Polling for session updates...");
+        loadData();
+      }
+    }, 2000);
+
+    return () => {
+      isMounted = false;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
   }, [gameId, currentRound, teamId]);
 
   // Real-time updates
@@ -194,26 +230,44 @@ export function RelayQuizPlayView({
   useRelayQuizSessionUpdates(gameId, handleSessionUpdate);
   useRelayQuizTeamProgressUpdates(session?.id || "", handleTeamProgressUpdate);
 
-  // Refresh question every 5 seconds when game is active (fallback)
+  // Refresh question when session becomes active or changes
   useEffect(() => {
-    if (session?.status === "active" && !isComplete) {
-      const interval = setInterval(async () => {
-        const questionResult = await getCurrentQuestionForTeam(
-          session.id,
-          teamId
-        );
-        if (questionResult.success) {
-          if (questionResult.isComplete) {
-            setIsComplete(true);
-          } else {
-            setCurrentQuestion(questionResult.question);
-          }
+    let isMounted = true;
+    
+    const refreshQuestion = async () => {
+      if (!session?.id || isComplete) return;
+      
+      console.log("🔄 [Relay Quiz] Refreshing question for session:", session.id);
+      
+      const questionResult = await getCurrentQuestionForTeam(
+        session.id,
+        teamId
+      );
+      
+      if (!isMounted) return;
+      
+      if (questionResult.success) {
+        if (questionResult.isComplete) {
+          console.log("✅ [Relay Quiz] Team completed all questions");
+          setIsComplete(true);
+        } else {
+          console.log("📝 [Relay Quiz] Updated question:", questionResult.question?.question_order);
+          setCurrentQuestion(questionResult.question);
         }
-      }, 5000);
+      } else {
+        console.error("❌ [Relay Quiz] Failed to get question:", questionResult.error);
+      }
+    };
 
-      return () => clearInterval(interval);
+    // Refresh immediately when session changes
+    if (session?.status === "active") {
+      refreshQuestion();
     }
-  }, [session?.status, session?.id, teamId, isComplete]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [session?.id, session?.status, teamId, isComplete]);
 
   const handleSubmitAnswer = async () => {
     if (!currentQuestion || !answer.trim()) {

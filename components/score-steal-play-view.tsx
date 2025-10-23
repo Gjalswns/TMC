@@ -82,30 +82,78 @@ export function ScoreStealPlayView({
   // 단순하고 확실한 데이터 로딩
   const loadSessionData = useCallback(async () => {
     const timestamp = new Date().toLocaleTimeString();
-    
+
     try {
-      console.log(`📥 [${timestamp}] Loading session data...`);
-      
-      // 1. 세션 데이터 로드
-      const sessionRes = await getScoreStealSessionDetails(sessionId);
-      
-      if (sessionRes.success && sessionRes.session) {
-        console.log(`📊 [${timestamp}] Session state:`, {
-          id: sessionRes.session.id,
-          phase: sessionRes.session.phase,
-          status: sessionRes.session.status,
-          current_question_id: sessionRes.session.current_question_id,
-          has_question_data: !!sessionRes.session.score_steal_questions,
-          question_title: sessionRes.session.score_steal_questions?.title,
-          question_image: sessionRes.session.score_steal_questions?.question_image_url,
-          broadcast_at: sessionRes.session.question_broadcast_at
-        });
-        
-        // 세션 상태 업데이트
-        setSession(sessionRes.session);
-      } else {
-        console.error(`❌ [${timestamp}] Session load failed:`, sessionRes.error);
+      console.log(`📥 [${timestamp}] Loading session data for sessionId: ${sessionId}...`);
+
+      // 1. 세션 데이터 로드 - 클라이언트에서 직접 쿼리 (캐시 방지)
+      console.log(`🔍 [${timestamp}] Querying Supabase directly from client...`);
+      const { data: rawSession, error: sessionError } = await supabase
+        .from("score_steal_sessions")
+        .select("*")
+        .eq("id", sessionId)
+        .single();
+
+      if (sessionError) {
+        console.error(`❌ [${timestamp}] Direct session query error:`, sessionError);
         return;
+      }
+
+      console.log(`📊 [${timestamp}] RAW Session from Supabase (direct):`, {
+        id: rawSession.id,
+        phase: rawSession.phase,
+        status: rawSession.status,
+        current_question_id: rawSession.current_question_id,
+        question_broadcast_at: rawSession.question_broadcast_at,
+        created_at: rawSession.created_at
+      });
+
+      // 현재 문제가 있다면 가져오기
+      let sessionWithQuestion = rawSession;
+      if (rawSession.current_question_id) {
+        console.log(`🔍 [${timestamp}] Fetching question: ${rawSession.current_question_id}`);
+        const { data: question, error: questionError } = await supabase
+          .from('central_questions')
+          .select('id, title, question_image_url, correct_answer, points')
+          .eq('id', rawSession.current_question_id)
+          .single();
+
+        if (questionError) {
+          console.error(`❌ [${timestamp}] Question fetch error:`, questionError);
+        } else if (question) {
+          console.log(`✅ [${timestamp}] Question loaded:`, {
+            id: question.id,
+            title: question.title,
+            hasImage: !!question.question_image_url
+          });
+          sessionWithQuestion = {
+            ...rawSession,
+            score_steal_questions: question
+          };
+        }
+      }
+
+      // 세션 데이터 로그
+      console.log(`📊 [${timestamp}] Final Session Data:`, {
+        id: sessionWithQuestion.id,
+        phase: sessionWithQuestion.phase,
+        status: sessionWithQuestion.status,
+        current_question_id: sessionWithQuestion.current_question_id,
+        has_question_data: !!sessionWithQuestion.score_steal_questions,
+        question_title: sessionWithQuestion.score_steal_questions?.title,
+        question_image: sessionWithQuestion.score_steal_questions?.question_image_url,
+        broadcast_at: sessionWithQuestion.question_broadcast_at,
+        created_at: sessionWithQuestion.created_at
+      });
+
+      // 세션 상태 업데이트 - 강제로 새 객체 생성하여 React 리렌더링 트리거
+      const newSession = { ...sessionWithQuestion };
+      setSession(newSession);
+      console.log(`✅ [${timestamp}] Session state updated in React. New phase: ${newSession.phase}`);
+
+      // 추가 검증: phase가 question_active인데 문제가 없으면 경고
+      if (newSession.phase === 'question_active' && !newSession.score_steal_questions) {
+        console.warn(`⚠️ [${timestamp}] Phase is 'question_active' but no question data!`);
       }
 
       // 2. 팀 데이터 로드
@@ -113,28 +161,28 @@ export function ScoreStealPlayView({
       if (teamsRes.success && teamsRes.teams) {
         const myTeam = teamsRes.teams.find((t: any) => t.id === teamId);
         const myBracket = myTeam?.bracket;
-        
+
         const filteredTeams = teamsRes.teams.filter((t: any) => {
           if (!myBracket) return true;
           return t.bracket === myBracket;
         });
-        
+
         console.log(`👥 [${timestamp}] Teams: ${filteredTeams.length} loaded`);
-        setTeams(filteredTeams);
+        setTeams([...filteredTeams]);
       }
 
       // 3. 보호된 팀 로드
       const protectedRes = await getProtectedTeams(gameId, currentRound);
       if (protectedRes.success) {
-        setProtectedTeams(protectedRes.protectedTeams.map((p: any) => p.team_id));
+        setProtectedTeams([...protectedRes.protectedTeams.map((p: any) => p.team_id)]);
       }
 
       // 4. 시도 기록 로드
       const attemptsRes = await getSessionAttempts(sessionId);
       if (attemptsRes.success) {
         console.log(`🎯 [${timestamp}] Attempts: ${attemptsRes.attempts.length} loaded`);
-        setAttempts(attemptsRes.attempts);
-        
+        setAttempts([...attemptsRes.attempts]);
+
         // 내 팀의 제출 여부 확인
         const myTeamAttempt = attemptsRes.attempts.find(
           (a: any) => a.team_id === teamId
@@ -142,46 +190,58 @@ export function ScoreStealPlayView({
         if (myTeamAttempt) {
           console.log(`✅ [${timestamp}] My team submitted:`, myTeamAttempt);
           setHasSubmitted(true);
-          setMyAttempt(myTeamAttempt);
+          setMyAttempt({ ...myTeamAttempt });
         } else {
           setHasSubmitted(false);
           setMyAttempt(null);
         }
       }
-      
+
       console.log(`✅ [${timestamp}] All data loaded successfully`);
-      
+
     } catch (error) {
       console.error(`❌ [${timestamp}] Load session data error:`, error);
     }
   }, [sessionId, gameId, currentRound, teamId]);
 
+  // 세션 상태 변경 감지
+  useEffect(() => {
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`🔔 [${timestamp}] [STATE CHANGE] Session state updated:`, {
+      phase: session?.phase,
+      status: session?.status,
+      current_question_id: session?.current_question_id,
+      hasQuestion: !!session?.score_steal_questions,
+      questionTitle: session?.score_steal_questions?.title
+    });
+  }, [session?.phase, session?.status, session?.current_question_id, session?.score_steal_questions]);
+
   // 단순하고 확실한 실시간 업데이트 (매번 전체 로드)
   useEffect(() => {
     setSseConnected(true);
     let pollCount = 0;
-    
+
     console.log(`🔧 Starting simple polling for session: ${sessionId}`);
-    
+
     const poll = async () => {
       pollCount++;
       const timestamp = new Date().toLocaleTimeString();
-      
+
       console.log(`🔄 [${timestamp}] Poll #${pollCount} - Loading all data...`);
-      
+
       try {
         // 매번 전체 데이터를 새로 로드 (가장 확실한 방법)
         await loadSessionData();
-        
+
         console.log(`✅ [${timestamp}] Poll #${pollCount} completed successfully`);
       } catch (error) {
         console.error(`❌ [${timestamp}] Poll #${pollCount} failed:`, error);
       }
     };
-    
+
     // 즉시 한 번 실행
     poll();
-    
+
     // 2초마다 폴링 (단순하고 확실함)
     const interval = setInterval(poll, 2000);
 
@@ -194,7 +254,7 @@ export function ScoreStealPlayView({
   // Monitor game round changes and redirect to next game
   useEffect(() => {
     let isMounted = true;
-    
+
     const checkGameRound = async () => {
       try {
         const { data: gameData } = await supabase
@@ -202,13 +262,13 @@ export function ScoreStealPlayView({
           .select("current_round, status")
           .eq("id", gameId)
           .single();
-        
+
         if (!isMounted || !gameData) return;
-        
+
         // If game round changed from 2, redirect to appropriate game
         if (gameData.current_round !== 2 && gameData.status === "started") {
           console.log(`🎮 Game round changed to ${gameData.current_round}, redirecting...`);
-          
+
           if (gameData.current_round === 3) {
             console.log(`🚀 Redirecting to relay-quiz...`);
             window.location.href = `/game/${gameId}/relay-quiz?participant=${participantId}`;
@@ -218,17 +278,17 @@ export function ScoreStealPlayView({
         console.error("❌ Failed to check game round:", error);
       }
     };
-    
+
     // Check immediately
     checkGameRound();
-    
+
     // Poll every 2 seconds
     const roundCheckInterval = setInterval(() => {
       if (isMounted) {
         checkGameRound();
       }
     }, 2000);
-    
+
     return () => {
       isMounted = false;
       clearInterval(roundCheckInterval);
@@ -269,11 +329,11 @@ export function ScoreStealPlayView({
           is_correct: result.isCorrect,
           response_time_ms: result.responseTimeMs,
         });
-        
+
         toast({
           title: result.isCorrect ? "정답!" : "오답",
-          description: result.isCorrect 
-            ? `응답 시간: ${result.responseTimeMs}ms` 
+          description: result.isCorrect
+            ? `응답 시간: ${result.responseTimeMs}ms`
             : "아쉽게도 틀렸습니다",
           variant: result.isCorrect ? "default" : "destructive",
         });
@@ -320,7 +380,7 @@ export function ScoreStealPlayView({
           title: "점수 뺏기 성공!",
           description: `${result.pointsStolen}점을 획득했습니다!`,
         });
-        
+
         await loadSessionData();
       } else {
         toast({
@@ -345,14 +405,20 @@ export function ScoreStealPlayView({
   const isWinner = winnerAttempt?.team_id === teamId;
   const correctAttempts = attempts.filter((a) => a.is_correct);
 
-  // Debug logging
-  console.log('🔍 Session data:', {
-    session,
+  // Debug logging - 렌더링 시점 확인
+  const renderTimestamp = new Date().toLocaleTimeString();
+  console.log(`🎨 [${renderTimestamp}] [RENDER] Score Steal Play View:`, {
+    sessionId,
+    hasSession: !!session,
     phase: session?.phase,
+    status: session?.status,
+    current_question_id: session?.current_question_id,
     hasQuestion: !!session?.score_steal_questions,
-    questionData: session?.score_steal_questions,
+    questionTitle: session?.score_steal_questions?.title,
+    questionImage: session?.score_steal_questions?.question_image_url,
     hasSubmitted,
-    myAttempt
+    myAttemptId: myAttempt?.id,
+    attemptsCount: attempts.length
   });
 
   // Phase rendering
@@ -412,11 +478,10 @@ export function ScoreStealPlayView({
               {sortedTeams.map((team, index) => (
                 <div
                   key={team.id}
-                  className={`flex items-center justify-between p-3 rounded-lg border ${
-                    index === 0 
-                      ? "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700" 
-                      : "bg-muted/50 border-transparent"
-                  } ${team.id === teamId ? "ring-2 ring-primary" : ""}`}
+                  className={`flex items-center justify-between p-3 rounded-lg border ${index === 0
+                    ? "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700"
+                    : "bg-muted/50 border-transparent"
+                    } ${team.id === teamId ? "ring-2 ring-primary" : ""}`}
                 >
                   <div className="flex items-center gap-3">
                     {index === 0 && <Trophy className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />}
@@ -702,11 +767,10 @@ export function ScoreStealPlayView({
                 {correctAttempts.map((attempt, index) => (
                   <div
                     key={attempt.id}
-                    className={`flex items-center justify-between p-3 rounded-lg border ${
-                      attempt.is_winner
-                        ? "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700"
-                        : "bg-muted/50 border-transparent"
-                    }`}
+                    className={`flex items-center justify-between p-3 rounded-lg border ${attempt.is_winner
+                      ? "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700"
+                      : "bg-muted/50 border-transparent"
+                      }`}
                   >
                     <div className="flex items-center gap-3">
                       {attempt.is_winner && (
@@ -765,11 +829,10 @@ export function ScoreStealPlayView({
               {sortedTeams.map((team, index) => (
                 <div
                   key={team.id}
-                  className={`flex items-center justify-between p-3 rounded-lg border ${
-                    index === 0 
-                      ? "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700" 
-                      : "bg-muted/50 border-transparent"
-                  } ${team.id === teamId ? "ring-2 ring-primary" : ""}`}
+                  className={`flex items-center justify-between p-3 rounded-lg border ${index === 0
+                    ? "bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 dark:border-yellow-700"
+                    : "bg-muted/50 border-transparent"
+                    } ${team.id === teamId ? "ring-2 ring-primary" : ""}`}
                 >
                   <div className="flex items-center gap-3">
                     {index === 0 && <Trophy className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />}

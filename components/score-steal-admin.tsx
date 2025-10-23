@@ -64,9 +64,9 @@ interface ScoreStealSession {
   ended_at?: string;
   score_steal_questions?: {
     id: string;
-    question_text: string;
+    title: string;
+    question_image_url: string;
     correct_answer: string;
-    difficulty: string;
     points: number;
   };
   teams?: {
@@ -113,6 +113,9 @@ export function ScoreStealAdmin({
 
   // Load session and data
   const loadData = useCallback(async () => {
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`🔄 [${timestamp}] [Score Steal Admin] Loading data...`);
+
     // Check if this is the last round AND if we're actually in Score Steal round
     const { data: gameData } = await supabase
       .from("games")
@@ -122,10 +125,10 @@ export function ScoreStealAdmin({
 
     if (gameData) {
       setIsLastRound(gameData.current_round >= gameData.total_rounds);
-      
+
       // CRITICAL: Only load session if we're actually in Score Steal round (Round 2)
       if (gameData.current_round !== 2) {
-        console.log(`⚠️ Skipping Score Steal session load - current round is ${gameData.current_round}, not 2`);
+        console.log(`⚠️ [${timestamp}] Skipping Score Steal session load - current round is ${gameData.current_round}, not 2`);
         return;
       }
     }
@@ -139,18 +142,30 @@ export function ScoreStealAdmin({
       .single();
 
     if (existingSession) {
+      console.log(`✅ [${timestamp}] Session found: ${existingSession.id}`);
+
       // Get full details
       const sessionRes = await getScoreStealSessionDetails(existingSession.id);
       if (sessionRes.success) {
-        setSession(sessionRes.session);
+        console.log(`📊 [${timestamp}] Session details:`, {
+          id: sessionRes.session.id,
+          phase: sessionRes.session.phase,
+          status: sessionRes.session.status,
+          current_question_id: sessionRes.session.current_question_id,
+          has_question_data: !!sessionRes.session.score_steal_questions,
+          question_title: sessionRes.session.score_steal_questions?.title
+        });
+        setSession({ ...sessionRes.session });
       }
 
       // Load attempts if session exists
       const attemptsRes = await getSessionAttempts(existingSession.id);
       if (attemptsRes.success) {
-        setAttempts(attemptsRes.attempts);
+        console.log(`🎯 [${timestamp}] Attempts: ${attemptsRes.attempts.length} loaded`);
+        setAttempts([...attemptsRes.attempts]);
       }
     } else {
+      console.log(`ℹ️ [${timestamp}] No session found`);
       setSession(null);
     }
 
@@ -170,36 +185,51 @@ export function ScoreStealAdmin({
       .order('created_at');
 
     if (!questionsError && centralQuestions) {
-      setQuestions(centralQuestions);
+      console.log(`📝 [${timestamp}] Questions: ${centralQuestions.length} loaded`);
+      setQuestions([...centralQuestions]);
     }
 
     // Load teams
     const teamsResult = await getAvailableTargets(gameId);
     if (teamsResult.success && teamsResult.teams) {
-      setTeams(teamsResult.teams);
+      console.log(`👥 [${timestamp}] Teams: ${teamsResult.teams.length} loaded`);
+      setTeams([...teamsResult.teams]);
     }
 
     // Load protected teams
     const protectedRes = await getProtectedTeams(gameId, currentRound);
     if (protectedRes.success) {
-      setProtectedTeams(protectedRes.protectedTeams);
+      console.log(`🛡️ [${timestamp}] Protected teams: ${protectedRes.protectedTeams.length} loaded`);
+      setProtectedTeams([...protectedRes.protectedTeams]);
     }
+
+    console.log(`✅ [${timestamp}] [Score Steal Admin] All data loaded`);
   }, [gameId, currentRound]);
 
+  // Initial load and continuous polling
   useEffect(() => {
-    loadData();
+    let isMounted = true;
+    let pollInterval: NodeJS.Timeout | null = null;
+
+    const poll = async () => {
+      if (isMounted) {
+        await loadData();
+      }
+    };
+
+    // Initial load
+    poll();
+
+    // Poll every 2 seconds for real-time updates
+    pollInterval = setInterval(poll, 2000);
+
+    return () => {
+      isMounted = false;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
   }, [loadData]);
-
-  // Poll for updates when game is active
-  useEffect(() => {
-    if (session?.phase === "question_active" || session?.phase === "waiting_for_target") {
-      const interval = setInterval(() => {
-        loadData();
-      }, 2000);
-
-      return () => clearInterval(interval);
-    }
-  }, [session?.phase, loadData]);
 
   const createNewSession = async () => {
     if (questions.length === 0) {
@@ -215,7 +245,7 @@ export function ScoreStealAdmin({
     try {
       console.log(`Creating score steal session for game ${gameId}, round ${currentRound}`);
       const result = await createScoreStealSession(gameId, currentRound);
-      
+
       if (result.success) {
         console.log("Session created successfully:", result.sessionId);
         await loadData();
@@ -283,11 +313,11 @@ export function ScoreStealAdmin({
       if (result.success) {
         toast({
           title: advanceToNextRound ? "다음 라운드로 이동" : "게임 종료",
-          description: advanceToNextRound 
-            ? "점수뺏기 게임이 종료되었습니다. 이어게임으로 이동합니다..." 
+          description: advanceToNextRound
+            ? "점수뺏기 게임이 종료되었습니다. 이어게임으로 이동합니다..."
             : "점수뺏기 게임이 종료되었습니다.",
         });
-        
+
         // Update parent component immediately
         if (advanceToNextRound) {
           // Force immediate update without reload
@@ -316,18 +346,30 @@ export function ScoreStealAdmin({
   };
 
   const handleBroadcastQuestion = async (questionId: string) => {
-    if (!session) return;
+    if (!session) {
+      console.error("❌ No session available for broadcast");
+      return;
+    }
+
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`📡 [${timestamp}] [Admin] Broadcasting question ${questionId} to session ${session.id}`);
 
     setIsLoading(true);
     try {
       const result = await broadcastQuestion(session.id, questionId);
+      console.log(`📊 [${timestamp}] [Admin] Broadcast result:`, result);
+
       if (result.success) {
+        console.log(`✅ [${timestamp}] [Admin] Question broadcasted successfully, reloading data...`);
         await loadData();
+        console.log(`✅ [${timestamp}] [Admin] Data reloaded after broadcast`);
+
         toast({
           title: "문제 공개!",
           description: "모든 팀에게 문제가 공개되었습니다",
         });
       } else {
+        console.error(`❌ [${timestamp}] [Admin] Broadcast failed:`, result.error);
         toast({
           title: "오류",
           description: result.error || "문제 공개 실패",
@@ -335,9 +377,52 @@ export function ScoreStealAdmin({
         });
       }
     } catch (error) {
+      console.error(`❌ [${timestamp}] [Admin] Broadcast exception:`, error);
       toast({
         title: "오류",
         description: "문제 공개 실패",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetQuestion = async () => {
+    if (!session) return;
+
+    const timestamp = new Date().toLocaleTimeString();
+    console.log(`🔄 [${timestamp}] [Admin] Resetting current question...`);
+
+    setIsLoading(true);
+    try {
+      // 세션의 현재 문제를 초기화
+      const { error: updateError } = await supabase
+        .from('score_steal_sessions')
+        .update({
+          current_question_id: null,
+          question_broadcast_at: null,
+          phase: 'waiting'
+        })
+        .eq('id', session.id);
+
+      if (updateError) {
+        console.error(`❌ [${timestamp}] [Admin] Reset failed:`, updateError);
+        throw updateError;
+      }
+
+      console.log(`✅ [${timestamp}] [Admin] Question reset successfully`);
+      await loadData();
+
+      toast({
+        title: "문제 초기화 완료",
+        description: "새로운 문제를 공개할 수 있습니다",
+      });
+    } catch (error) {
+      console.error(`❌ [${timestamp}] [Admin] Reset exception:`, error);
+      toast({
+        title: "오류",
+        description: "문제 초기화 실패",
         variant: "destructive",
       });
     } finally {
@@ -395,9 +480,8 @@ export function ScoreStealAdmin({
         <CardContent>
           <div className="space-y-3">
             <div className="flex items-center gap-3">
-              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
-                questions.length > 0 ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
-              }`}>
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${questions.length > 0 ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
+                }`}>
                 1
               </div>
               <div className="flex-1">
@@ -412,11 +496,10 @@ export function ScoreStealAdmin({
                 <AlertCircle className="h-5 w-5 text-gray-400" />
               )}
             </div>
-            
+
             <div className="flex items-center gap-3">
-              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
-                session ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
-              }`}>
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${session ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
+                }`}>
                 2
               </div>
               <div className="flex-1">
@@ -431,11 +514,10 @@ export function ScoreStealAdmin({
                 <AlertCircle className="h-5 w-5 text-gray-400" />
               )}
             </div>
-            
+
             <div className="flex items-center gap-3">
-              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
-                session?.status === 'active' ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
-              }`}>
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${session?.status === 'active' ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
+                }`}>
                 3
               </div>
               <div className="flex-1">
@@ -450,11 +532,10 @@ export function ScoreStealAdmin({
                 <AlertCircle className="h-5 w-5 text-gray-400" />
               )}
             </div>
-            
+
             <div className="flex items-center gap-3">
-              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${
-                session?.current_question_id ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
-              }`}>
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm font-bold ${session?.current_question_id ? 'bg-green-500 text-white' : 'bg-gray-300 text-gray-600'
+                }`}>
                 4
               </div>
               <div className="flex-1">
@@ -472,6 +553,52 @@ export function ScoreStealAdmin({
           </div>
         </CardContent>
       </Card>
+
+      {/* Debug: Session State */}
+      {session && (
+        <Card className="border-blue-500 bg-blue-50 dark:bg-blue-950 dark:border-blue-700">
+          <CardHeader>
+            <CardTitle className="text-sm text-blue-900 dark:text-blue-100">🔍 세션 상태 (디버그)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-xs space-y-1 font-mono text-blue-900 dark:text-blue-100">
+              <div>ID: <span className="text-blue-700 dark:text-blue-300">{session.id}</span></div>
+              <div>Status: <span className="font-bold text-blue-800 dark:text-blue-200">{session.status}</span></div>
+              <div>Phase: <span className="font-bold text-blue-800 dark:text-blue-200">{session.phase}</span></div>
+              <div>Current Question ID: <span className="font-bold text-blue-800 dark:text-blue-200">{session.current_question_id || 'null'}</span></div>
+              <div>Has Question Data: <span className="font-bold text-blue-800 dark:text-blue-200">{session.score_steal_questions ? 'Yes' : 'No'}</span></div>
+              {session.score_steal_questions && (
+                <div>Question Title: <span className="font-bold text-blue-800 dark:text-blue-200">{session.score_steal_questions.title}</span></div>
+              )}
+              <div className="mt-2 pt-2 border-t border-blue-400 dark:border-blue-600">
+                <div className="font-semibold mb-1">버튼 표시 조건:</div>
+                <div>- status === 'active': <span className={session.status === 'active' ? 'text-green-700 dark:text-green-400 font-bold' : 'text-red-700 dark:text-red-400 font-bold'}>
+                  {session.status === 'active' ? '✓' : '✗'}
+                </span></div>
+                <div>- !current_question_id: <span className={!session.current_question_id ? 'text-green-700 dark:text-green-400 font-bold' : 'text-red-700 dark:text-red-400 font-bold'}>
+                  {!session.current_question_id ? '✓' : '✗'}
+                </span></div>
+                <div className="font-bold mt-1 text-blue-900 dark:text-blue-100">
+                  → 공개 버튼: {session.status === 'active' && !session.current_question_id ? '표시됨 ✓' : '숨김 ✗'}
+                </div>
+                {session.current_question_id && (
+                  <div className="mt-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleResetQuestion}
+                      disabled={isLoading}
+                      className="w-full text-xs"
+                    >
+                      🔄 문제 초기화 (다시 공개하기)
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Session Control */}
       <Card>
@@ -491,7 +618,7 @@ export function ScoreStealAdmin({
                 <Alert>
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>
-                    <strong>세션을 생성할 수 없습니다!</strong><br/>
+                    <strong>세션을 생성할 수 없습니다!</strong><br />
                     먼저 중앙 문제 관리에서 점수뺏기 문제를 추가해주세요.
                   </AlertDescription>
                 </Alert>
@@ -503,8 +630,8 @@ export function ScoreStealAdmin({
                   </AlertDescription>
                 </Alert>
               )}
-              <Button 
-                onClick={createNewSession} 
+              <Button
+                onClick={createNewSession}
                 disabled={isLoading || questions.length === 0}
               >
                 {isLoading ? "생성 중..." : "점수 뺏기 세션 생성"}
@@ -525,8 +652,8 @@ export function ScoreStealAdmin({
                         session.status === "active"
                           ? "default"
                           : session.status === "finished"
-                          ? "secondary"
-                          : "outline"
+                            ? "secondary"
+                            : "outline"
                       }
                     >
                       {session.status === "waiting" && "대기 중"}
@@ -611,7 +738,7 @@ export function ScoreStealAdmin({
             <Alert>
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                <strong>점수뺏기 문제가 없습니다!</strong><br/>
+                <strong>점수뺏기 문제가 없습니다!</strong><br />
                 게임을 시작하기 전에 중앙 문제 관리에서 점수뺏기 카테고리에 문제를 추가해주세요.
               </AlertDescription>
             </Alert>
@@ -619,7 +746,7 @@ export function ScoreStealAdmin({
             <Alert>
               <CheckCircle className="h-4 w-4" />
               <AlertDescription>
-                점수뺏기 문제 {questions.length}개가 준비되었습니다. 
+                점수뺏기 문제 {questions.length}개가 준비되었습니다.
                 문제를 추가하거나 수정하려면 중앙 문제 관리로 이동하세요.
               </AlertDescription>
             </Alert>
@@ -643,11 +770,10 @@ export function ScoreStealAdmin({
             {questions.map((question) => (
               <div
                 key={question.id}
-                className={`flex items-center justify-between p-3 border rounded-lg ${
-                  session?.current_question_id === question.id
-                    ? "ring-2 ring-primary"
-                    : ""
-                }`}
+                className={`flex items-center justify-between p-3 border rounded-lg ${session?.current_question_id === question.id
+                  ? "ring-2 ring-primary"
+                  : ""
+                  }`}
               >
                 <div className="flex-1">
                   <p className="font-medium">{question.title}</p>
@@ -668,12 +794,15 @@ export function ScoreStealAdmin({
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary">{question.points}점</Badge>
-                  {session?.status === "active" &&
-                    session?.phase === "waiting" &&
-                    !session?.current_question_id && (
+                  {session &&
+                    session.status === "active" &&
+                    !session.current_question_id && (
                       <Button
                         size="sm"
-                        onClick={() => handleBroadcastQuestion(question.id)}
+                        onClick={() => {
+                          console.log(`🎯 [Admin] Broadcast button clicked for question: ${question.id}`);
+                          handleBroadcastQuestion(question.id);
+                        }}
                         disabled={isLoading}
                       >
                         <Send className="h-4 w-4 mr-1" />
@@ -829,9 +958,8 @@ export function ScoreStealAdmin({
             {sortedTeams.map((team, index) => (
               <div
                 key={team.id}
-                className={`flex items-center justify-between p-3 rounded-lg ${
-                  index === 0 ? "bg-yellow-50 border-yellow-200" : "bg-muted/50"
-                }`}
+                className={`flex items-center justify-between p-3 rounded-lg ${index === 0 ? "bg-yellow-50 border-yellow-200" : "bg-muted/50"
+                  }`}
               >
                 <div className="flex items-center gap-3">
                   {index === 0 && (

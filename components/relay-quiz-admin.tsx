@@ -101,15 +101,22 @@ export function RelayQuizAdmin({
     points: 10,
   });
 
-  // Load session and data
+  // Load session and data with polling
   useEffect(() => {
+    let isMounted = true;
+    let pollInterval: NodeJS.Timeout | null = null;
+
     const loadData = async () => {
+      console.log("🔄 [Relay Quiz Admin] Loading session data...");
+      
       // Check if this is the last round AND if we're actually in Relay Quiz round
       const { data: gameData } = await supabase
         .from("games")
         .select("current_round, total_rounds")
         .eq("id", gameId)
         .single();
+
+      if (!isMounted) return;
 
       if (gameData) {
         setIsLastRound(gameData.current_round >= gameData.total_rounds);
@@ -122,7 +129,7 @@ export function RelayQuizAdmin({
       }
 
       // Check for existing session
-      const { data: existingSession } = await supabase
+      const { data: existingSession, error: sessionError } = await supabase
         .from("relay_quiz_sessions")
         .select(
           `
@@ -142,13 +149,29 @@ export function RelayQuizAdmin({
         .eq("round_number", currentRound)
         .single();
 
+      if (sessionError) {
+        console.log("ℹ️ [Relay Quiz Admin] No session found:", sessionError.message);
+      }
+
+      if (!isMounted) return;
+
       if (existingSession) {
+        console.log("✅ [Relay Quiz Admin] Session loaded:", {
+          id: existingSession.id,
+          status: existingSession.status,
+          hasQuestions: !!existingSession.question_data,
+          questionCount: existingSession.question_data ? JSON.parse(existingSession.question_data).length : 0
+        });
         setSession(existingSession);
+      } else {
+        console.log("⚠️ [Relay Quiz Admin] No session found");
+        setSession(null);
       }
 
       // Load questions
       const questionsResult = await getRelayQuizQuestions(gameId, currentRound);
-      if (questionsResult.success && questionsResult.questions) {
+      if (questionsResult.success && questionsResult.questions && isMounted) {
+        console.log(`📝 [Relay Quiz Admin] Loaded ${questionsResult.questions.length} questions`);
         setQuestions(questionsResult.questions);
         // Update question order for new question
         setNewQuestion((prev) => ({
@@ -158,7 +181,23 @@ export function RelayQuizAdmin({
       }
     };
 
+    // Initial load
     loadData();
+
+    // Poll for updates every 2 seconds
+    pollInterval = setInterval(() => {
+      if (isMounted) {
+        console.log("🔄 [Relay Quiz Admin] Polling for updates...");
+        loadData();
+      }
+    }, 2000);
+
+    return () => {
+      isMounted = false;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
   }, [gameId, currentRound]);
 
   // Timer for active sessions

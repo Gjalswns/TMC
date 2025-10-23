@@ -389,7 +389,8 @@ export async function broadcastQuestion(
   questionId: string
 ) {
   try {
-    console.log(`📡 Broadcasting central question ${questionId} to session ${sessionId}`);
+    const timestamp = new Date().toISOString();
+    console.log(`📡 [${timestamp}] Broadcasting central question ${questionId} to session ${sessionId}`);
 
     // 중앙 문제 관리에서 문제 정보 가져오기
     const { data: question, error: questionError } = await supabase
@@ -399,17 +400,27 @@ export async function broadcastQuestion(
       .single();
 
     if (questionError || !question) {
-      console.error('❌ Question not found:', questionError);
+      console.error(`❌ [${timestamp}] Question not found:`, questionError);
       throw new Error('Question not found in central questions');
     }
 
-    console.log('✅ Question found:', {
+    console.log(`✅ [${timestamp}] Question found:`, {
       id: question.id,
       title: question.title,
-      hasImage: !!question.question_image_url
+      hasImage: !!question.question_image_url,
+      imageUrl: question.question_image_url
     });
 
     const broadcastTime = new Date().toISOString();
+
+    // 먼저 현재 세션 상태 확인
+    const { data: currentSession } = await supabase
+      .from('score_steal_sessions')
+      .select('id, phase, status, current_question_id')
+      .eq('id', sessionId)
+      .single();
+
+    console.log(`📊 [${timestamp}] Current session state BEFORE update:`, currentSession);
 
     // 세션에 현재 문제 설정 및 브로드캐스트 시간 기록
     const { data: updatedSession, error: updateError } = await supabase
@@ -425,16 +436,26 @@ export async function broadcastQuestion(
       .single();
 
     if (updateError) {
-      console.error('❌ Session update error:', updateError);
+      console.error(`❌ [${timestamp}] Session update error:`, updateError);
       throw updateError;
     }
 
-    console.log(`✅ Session updated successfully:`, {
+    console.log(`✅ [${timestamp}] Session updated successfully:`, {
       sessionId: updatedSession.id,
       phase: updatedSession.phase,
+      status: updatedSession.status,
       current_question_id: updatedSession.current_question_id,
       broadcast_at: updatedSession.question_broadcast_at
     });
+
+    // 업데이트 후 다시 확인
+    const { data: verifySession } = await supabase
+      .from('score_steal_sessions')
+      .select('id, phase, status, current_question_id, question_broadcast_at')
+      .eq('id', sessionId)
+      .single();
+
+    console.log(`🔍 [${timestamp}] Verification - Session state AFTER update:`, verifySession);
 
     revalidatePath("/admin");
     revalidatePath("/game");
@@ -636,8 +657,10 @@ export async function getScoreStealSessionStatus(sessionId: string) {
  */
 export async function getScoreStealSessionDetails(sessionId: string) {
   try {
-    console.log(`🔍 Getting session details for: ${sessionId}`);
+    const timestamp = new Date().toISOString();
+    console.log(`🔍 [${timestamp}] Getting session details for: ${sessionId}`);
     
+    // 캐시 방지: 매번 새로운 쿼리 실행
     const { data: session, error } = await supabase
       .from("score_steal_sessions")
       .select(
@@ -653,14 +676,18 @@ export async function getScoreStealSessionDetails(sessionId: string) {
       .eq("id", sessionId)
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error(`❌ [${timestamp}] Session query error:`, error);
+      throw error;
+    }
 
-    console.log(`📊 Session data:`, {
+    console.log(`📊 [${timestamp}] Session data from DB:`, {
       id: session.id,
       phase: session.phase,
       status: session.status,
       current_question_id: session.current_question_id,
-      question_broadcast_at: session.question_broadcast_at
+      question_broadcast_at: session.question_broadcast_at,
+      created_at: session.created_at
     });
 
     // 현재 문제가 있다면 중앙 문제 관리에서 가져오기

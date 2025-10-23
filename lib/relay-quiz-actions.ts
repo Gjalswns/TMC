@@ -27,6 +27,25 @@ export async function createRelayQuizSession(
       };
     }
 
+    // Get questions for this round FIRST
+    const { data: questions } = await supabase
+      .from("relay_quiz_questions")
+      .select("*")
+      .eq("game_id", gameId)
+      .eq("round_number", roundNumber)
+      .order("question_order");
+
+    console.log(`📝 [Relay Quiz] Found ${questions?.length || 0} questions for session`);
+
+    // Prepare question data
+    const questionData = questions?.map(q => ({
+      id: q.id,
+      question_order: q.question_order,
+      question_text: q.question_text,
+      correct_answer: q.correct_answer,
+      points: q.points
+    })) || [];
+
     const { data: session, error } = await supabase
       .from("relay_quiz_sessions")
       .insert({
@@ -34,19 +53,14 @@ export async function createRelayQuizSession(
         round_number: roundNumber,
         time_limit_seconds: timeLimit,
         status: "waiting",
+        question_data: JSON.stringify(questionData), // Store questions in session
       })
       .select()
       .single();
 
     if (error) throw error;
 
-    // Get questions for this round
-    const { data: questions } = await supabase
-      .from("relay_quiz_questions")
-      .select("*")
-      .eq("game_id", gameId)
-      .eq("round_number", roundNumber)
-      .order("question_order");
+    console.log(`✅ [Relay Quiz] Session created with ${questionData.length} questions`);
 
     // Initialize team progress for all teams
     const { data: teams } = await supabase
@@ -402,6 +416,8 @@ export async function getCurrentQuestionForTeam(
   teamId: string
 ) {
   try {
+    console.log(`🔍 [Relay Quiz] Getting current question for team ${teamId} in session ${sessionId}`);
+    
     // Get team progress
     const { data: teamProgress, error: progressError } = await supabase
       .from("relay_quiz_team_progress")
@@ -411,51 +427,82 @@ export async function getCurrentQuestionForTeam(
       .single();
 
     if (progressError || !teamProgress) {
+      console.error("❌ [Relay Quiz] Team progress not found:", progressError);
       return { success: false, error: "Team progress not found" };
     }
 
+    console.log(`📊 [Relay Quiz] Team progress: ${teamProgress.current_question_order}/${teamProgress.total_questions}`);
+
     if (teamProgress.current_question_order > teamProgress.total_questions) {
+      console.log("✅ [Relay Quiz] Team completed all questions");
       return { success: true, question: null, isComplete: true };
     }
 
-    // Get session to find game_id and round_number
+    // Get session with question_data
     const { data: session, error: sessionError } = await supabase
       .from("relay_quiz_sessions")
-      .select("game_id, round_number")
+      .select("game_id, round_number, question_data")
       .eq("id", sessionId)
       .single();
 
     if (sessionError || !session) {
+      console.error("❌ [Relay Quiz] Session not found:", sessionError);
       return { success: false, error: "Session not found" };
     }
 
-    // Get current question
-    const { data: question, error: questionError } = await supabase
-      .from("relay_quiz_questions")
-      .select("*")
-      .eq("game_id", session.game_id)
-      .eq("round_number", session.round_number)
-      .eq("question_order", teamProgress.current_question_order)
-      .single();
+    let question = null;
 
-    if (questionError || !question) {
-      return { success: false, error: "Question not found" };
+    // Try to get question from question_data first (faster)
+    if (session.question_data) {
+      try {
+        const questions = JSON.parse(session.question_data);
+        question = questions.find((q: any) => q.question_order === teamProgress.current_question_order);
+        console.log(`📝 [Relay Quiz] Found question from question_data:`, question?.question_order);
+      } catch (e) {
+        console.error("❌ [Relay Quiz] Failed to parse question_data:", e);
+      }
+    }
+
+    // Fallback to database query if question_data is not available
+    if (!question) {
+      console.log("🔄 [Relay Quiz] Falling back to database query for question");
+      const { data: dbQuestion, error: questionError } = await supabase
+        .from("relay_quiz_questions")
+        .select("*")
+        .eq("game_id", session.game_id)
+        .eq("round_number", session.round_number)
+        .eq("question_order", teamProgress.current_question_order)
+        .single();
+
+      if (questionError || !dbQuestion) {
+        console.error("❌ [Relay Quiz] Question not found:", questionError);
+        return { success: false, error: "Question not found" };
+      }
+      
+      question = dbQuestion;
+      console.log(`📝 [Relay Quiz] Found question from database:`, question.question_order);
     }
 
     // Get previous answer if this is not the first question
     let previousAnswer = null;
     if (teamProgress.current_question_order > 1) {
+      // Get the previous question's correct answer from the last successful attempt
+      const previousQuestionOrder = teamProgress.current_question_order - 1;
+      
       const { data: previousAttempt } = await supabase
         .from("relay_quiz_attempts")
-        .select("answer")
+        .select("answer, is_correct")
         .eq("session_id", sessionId)
         .eq("team_id", teamId)
-        .eq("question_id", question.id)
+        .eq("is_correct", true)
         .order("submitted_at", { ascending: false })
         .limit(1)
         .single();
 
-      previousAnswer = previousAttempt?.answer || null;
+      if (previousAttempt) {
+        previousAnswer = previousAttempt.answer;
+        console.log(`📝 [Relay Quiz] Previous answer: ${previousAnswer}`);
+      }
     }
 
     return {
@@ -467,7 +514,7 @@ export async function getCurrentQuestionForTeam(
       isComplete: false,
     };
   } catch (error) {
-    console.error("Error getting current question for team:", error);
+    console.error("❌ [Relay Quiz] Error getting current question for team:", error);
     return {
       success: false,
       error: (error as Error).message || "Failed to get current question",

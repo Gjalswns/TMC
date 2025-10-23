@@ -6,12 +6,13 @@
         "-y",
         "@upstash/context7-mcp",
         "--api-key",
-        "YOUR_API_KEY"
+        "ctx7sk-59b648ea-b9e8-4bdc-97e1-4a5c2b493ccc"
       ],
       "env": {},
       "disabled": false,
       "autoApprove": [
-        "resolve-library-id"
+        "resolve-library-id",
+        "get-library-docs"
       ]
     }
   }
