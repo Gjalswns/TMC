@@ -82,11 +82,11 @@ export function EnhancedGameDashboard({
 
   const copyGameCode = async () => {
     try {
-      await navigator.clipboard.writeText(game.game_code);
+      await navigator.clipboard.writeText(game.join_code);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.log("Game code:", game.game_code);
+      console.log("Game code:", game.join_code);
     }
   };
 
@@ -239,7 +239,7 @@ export function EnhancedGameDashboard({
                 ) : (
                   <Copy className="h-4 w-4" />
                 )}
-                {game.game_code}
+                {game.join_code}
               </Button>
             </div>
           </CardTitle>
@@ -284,7 +284,7 @@ export function EnhancedGameDashboard({
               </Button>
             )}
             
-            {game.status === "started" && game.current_round < (game.total_rounds || 4) && (
+            {game.status === "in_progress" && game.current_round < (game.total_rounds || 4) && (
               <Button
                 onClick={handleNextRound}
                 disabled={isLoading}

@@ -132,7 +132,7 @@ export function GameWaitingRoom({
             .eq("id", game.id)
             .single();
           
-          if (currentGame && currentGame.status === "started" && currentGame.current_round >= 1) {
+          if (currentGame && currentGame.status === "in_progress" && currentGame.current_round >= 1) {
             console.log("✅ Game status verified via database! Redirecting...");
             redirect();
           } else {
@@ -244,7 +244,7 @@ export function GameWaitingRoom({
         console.log('🎮 Game updated via postgres_changes:', payload);
         const newGame = payload.new as Game;
         setGame(newGame);
-        if (newGame.status === "started") {
+        if (newGame.status === "in_progress") {
           const targetGame = getGameRoute(newGame.current_round);
           console.log(`✅ Game started via postgres! Redirecting to ${targetGame}...`);
           window.location.href = `/game/${game.id}/${targetGame}?participant=${participant?.id}`;
@@ -294,7 +294,7 @@ export function GameWaitingRoom({
       setGame(newGame);
 
       // Always redirect to Year Game when game starts
-      if (newGame.status === "started") {
+      if (newGame.status === "in_progress") {
         const targetGame = getGameRoute(newGame.current_round);
         console.log(`Redirecting to ${targetGame}...`);
         window.location.href = `/game/${newGame.id}/${targetGame}?participant=${participant?.id}`;
@@ -330,7 +330,7 @@ export function GameWaitingRoom({
           setGame(updatedGame);
           
           // 게임이 정말로 시작되었을 때만 리다이렉트 (더 엄격한 조건)
-          if (updatedGame.status === "started" && updatedGame.current_round >= 1) {
+          if (updatedGame.status === "in_progress" && updatedGame.current_round >= 1) {
             const targetGame = getGameRoute(updatedGame.current_round);
             console.log(`✅ Game started via polling! Redirecting to ${targetGame}...`);
             redirected = true;

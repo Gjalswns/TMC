@@ -26,10 +26,6 @@ import {
 import { TeamAssignment } from "./team-assignment";
 import { Scoreboard } from "./scoreboard";
 import { YearGameAdmin } from "./year-game-admin";
-import { ScoreStealAdmin } from "./score-steal-admin";
-import { RelayQuizAdmin } from "./relay-quiz-admin";
-import { getScoreStealQuestions } from "@/lib/score-steal-actions";
-import { getRelayQuizQuestions } from "@/lib/relay-quiz-actions";
 import {
   Users,
   Clock,
@@ -66,9 +62,6 @@ export function GameDashboard({
   const [participants, setParticipants] = useState(initialParticipants);
   const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [roundQuestions, setRoundQuestions] = useState<{
-    [key: number]: { scoreSteal: number; relayQuiz: number };
-  }>({});
   const [websocketStatus, setWebsocketStatus] = useState<{
     games: boolean;
     participants: boolean;
@@ -76,47 +69,16 @@ export function GameDashboard({
   }>({ games: false, participants: false, teams: false });
   const router = useRouter();
 
-  const gameUrl = `/join/${game.game_code}`;
-
-  // Load round questions count
-  const loadRoundQuestions = useCallback(async () => {
-    const questions: {
-      [key: number]: { scoreSteal: number; relayQuiz: number };
-    } = {};
-
-    // Load questions for rounds 2-3
-    for (let round = 2; round <= 3; round++) {
-      const [scoreStealResult, relayQuizResult] = await Promise.all([
-        getScoreStealQuestions(game.id, round),
-        getRelayQuizQuestions(game.id, round),
-      ]);
-
-      questions[round] = {
-        scoreSteal: scoreStealResult.success
-          ? scoreStealResult.questions?.length || 0
-          : 0,
-        relayQuiz: relayQuizResult.success
-          ? relayQuizResult.questions?.length || 0
-          : 0,
-      };
-    }
-
-    setRoundQuestions(questions);
-  }, [game.id]);
-
-  // Load questions on mount and when game changes
-  useEffect(() => {
-    loadRoundQuestions();
-  }, [loadRoundQuestions]);
+  const gameUrl = `/join/${game.join_code}`;
 
   const copyGameCode = async () => {
     try {
-      await navigator.clipboard.writeText(game.game_code);
+      await navigator.clipboard.writeText(game.join_code);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       // Fallback for browsers that don't support clipboard API
-      console.log("Game code:", game.game_code);
+      console.log("Game code:", game.join_code);
     }
   };
 
@@ -261,7 +223,7 @@ export function GameDashboard({
             variant={game.status === "waiting" ? "secondary" : "default"}
             className="text-lg px-4 py-2"
           >
-            {game.status === "started"
+            {game.status === "in_progress"
               ? `Round ${game.current_round}`
               : game.status}
           </Badge>
@@ -299,7 +261,7 @@ export function GameDashboard({
           <CardContent className="flex items-center gap-2 p-4">
             <Hash className="h-5 w-5 text-muted-foreground" />
             <div className="flex-1">
-              <p className="text-2xl font-bold">{game.game_code}</p>
+              <p className="text-2xl font-bold">{game.join_code}</p>
               <p className="text-sm text-muted-foreground">
                 Game Code (Click to copy)
               </p>
@@ -343,53 +305,24 @@ export function GameDashboard({
         </Card>
       </div>
 
-      {/* Round Questions Overview */}
+      {/* Game Mode Overview */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Hash className="h-5 w-5" />
-            Round Questions Overview
+            Game Mode
           </CardTitle>
-          <CardDescription>Questions prepared for each round</CardDescription>
+          <CardDescription>Year Game - Number Challenge</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-3">
-            {/* Round 1 - Year Game */}
-            <div className="p-4 border rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="font-medium">Round 1 - Year Game</h4>
-                <Badge variant="outline">Numbers</Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Uses 4 target numbers for mathematical expressions
-              </p>
+          <div className="p-4 border rounded-lg">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-medium">Year Game</h4>
+              <Badge variant="outline">Numbers</Badge>
             </div>
-
-            {/* Round 2 - Score Steal */}
-            <div className="p-4 border rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="font-medium">Round 2 - Score Steal</h4>
-                <Badge variant="outline">
-                  {roundQuestions[2]?.scoreSteal || 0} questions
-                </Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Teams attack each other with questions
-              </p>
-            </div>
-
-            {/* Round 3 - Relay Quiz */}
-            <div className="p-4 border rounded-lg">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="font-medium">Round 3 - Relay Quiz</h4>
-                <Badge variant="outline">
-                  {roundQuestions[3]?.relayQuiz || 0} questions
-                </Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Sequential questions with connected answers
-              </p>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              Teams create mathematical expressions using 4 target numbers to reach specific values
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -425,9 +358,9 @@ export function GameDashboard({
         </div>
       )}
 
-      {game.status === "started" && (
+      {game.status === "in_progress" && (
         <div className="space-y-6">
-          {/* Round 1: Year Game */}
+          {/* Year Game (only game mode) */}
           {game.current_round === 1 && (
             <YearGameAdmin
               gameId={game.id}
@@ -435,46 +368,8 @@ export function GameDashboard({
               onGameUpdate={() => {
                 // Refresh the page to get updated data
                 router.refresh();
-                loadRoundQuestions();
               }}
             />
-          )}
-
-          {/* Round 2: Score Steal Game */}
-          {game.current_round === 2 && (
-            <ScoreStealAdmin
-              gameId={game.id}
-              currentRound={game.current_round}
-              onGameUpdate={() => {
-                // Refresh the page to get updated data
-                router.refresh();
-                loadRoundQuestions();
-              }}
-            />
-          )}
-
-          {/* Round 3: Relay Quiz Game */}
-          {game.current_round === 3 && (
-            <RelayQuizAdmin
-              gameId={game.id}
-              currentRound={game.current_round}
-              onGameUpdate={() => {
-                // Refresh the page to get updated data
-                router.refresh();
-                loadRoundQuestions();
-              }}
-            />
-          )}
-
-          {/* Next Round Button */}
-          {game.current_round < (game.total_rounds || 3) && (
-            <div className="flex justify-center">
-              <Button onClick={handleNextRound} disabled={isLoading} size="lg">
-                {isLoading
-                  ? "Loading..."
-                  : `Next Round (${game.current_round + 1})`}
-              </Button>
-            </div>
           )}
         </div>
       )}

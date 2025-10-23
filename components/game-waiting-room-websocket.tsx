@@ -77,7 +77,7 @@ export function GameWaitingRoom({
     const timestamp = new Date().toLocaleTimeString();
     
     // 게임이 시작되면 즉시 리다이렉트
-    if (game.status === "started" && game.current_round >= 1) {
+    if (game.status === "in_progress" && game.current_round >= 1) {
       const targetGame = getGameRoute(game.current_round);
       console.log(`✅ [${timestamp}] Game started! Redirecting to ${targetGame}...`);
       window.location.href = `/game/${game.id}/${targetGame}?participant=${participant?.id}`;

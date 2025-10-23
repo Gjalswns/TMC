@@ -131,23 +131,21 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-### 4. 데이터베이스 마이그레이션
+### 4. 데이터베이스 초기화
 
-Supabase SQL Editor에서 다음 스크립트를 순서대로 실행하세요:
+**🎉 NEW: 깔끔하게 정리된 마이그레이션!**
+
+Supabase SQL Editor에서 다음 3개 파일을 순서대로 실행하세요:
 
 ```bash
-scripts/001-create-tables.sql
-scripts/002-add-timeout-to-games.sql
-scripts/003-flexible-rounds.sql
-scripts/004-year-game-tables.sql
-scripts/005-score-steal-tables.sql
-scripts/006-relay-quiz-tables.sql
-scripts/007-add-score-functions.sql
-scripts/008-improve-participant-logic.sql
-scripts/009-concurrent-safety-improvements.sql      # ✨ NEW
-scripts/010-performance-optimizations.sql           # ✨ NEW
-scripts/011-rate-limiting-and-security.sql          # ✨ NEW
+supabase/migrations/00_fresh_start.sql          # 모든 테이블
+supabase/migrations/01_essential_functions.sql  # 모든 함수
+supabase/migrations/02_enable_realtime.sql      # Realtime 활성화
 ```
+
+**빠른 시작 가이드**: `supabase/migrations/QUICK_START.md` 참고
+
+**⚠️ 주의**: 기존 데이터가 모두 삭제됩니다. 백업 필수!
 
 ### 5. Edge Functions 배포
 

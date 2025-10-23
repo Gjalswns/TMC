@@ -209,22 +209,7 @@ export async function endYearGameSession(sessionId: string, advanceToNextRound: 
           } else {
             console.log(`✅ Advanced to round ${nextRoundNumber}`);
             
-            // Create appropriate session for the new round
-            if (nextRoundNumber === 2) {
-              // Create Score Steal session for round 2
-              const { createScoreStealSession } = await import("./score-steal-actions");
-              const scoreStealResult = await createScoreStealSession(session.game_id, nextRoundNumber);
-              if (!scoreStealResult.success) {
-                console.error("Failed to create Score Steal session:", scoreStealResult.error);
-              }
-            } else if (nextRoundNumber === 3 || nextRoundNumber === 4) {
-              // Create Relay Quiz session for rounds 3-4
-              const { createRelayQuizSession } = await import("./relay-quiz-actions");
-              const relayQuizResult = await createRelayQuizSession(session.game_id, nextRoundNumber);
-              if (!relayQuizResult.success) {
-                console.error("Failed to create Relay Quiz session:", relayQuizResult.error);
-              }
-            }
+            // Year Game only - no additional sessions needed for other rounds
           }
         }
       }

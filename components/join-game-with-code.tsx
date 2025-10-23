@@ -267,7 +267,7 @@ export default function JoinGameWithCode({
   
   console.log("🎮 Game join status:", {
     gameId: game.id,
-    gameCode: game.game_code,
+    gameCode: game.join_code,
     status: game.status,
     isJoinable: game.isJoinable,
     canJoin,

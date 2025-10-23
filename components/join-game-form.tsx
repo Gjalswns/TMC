@@ -30,7 +30,7 @@ export function JoinGameForm({ game }: JoinGameFormProps) {
       const nickname = formData.get("nickname") as string
       const studentId = formData.get("studentId") as string
 
-      const result = await joinGame(game.game_code, nickname, studentId || undefined)
+      const result = await joinGame(game.join_code, nickname, studentId || undefined)
 
       if (result.success) {
         router.push(`/game/${result.gameId}/wait?participant=${result.participantId}`)
@@ -71,7 +71,7 @@ export function JoinGameForm({ game }: JoinGameFormProps) {
         <div className="grid grid-cols-3 gap-4 text-center">
           <div className="space-y-1">
             <Hash className="h-5 w-5 mx-auto text-muted-foreground" />
-            <p className="text-sm font-medium">{game.game_code}</p>
+            <p className="text-sm font-medium">{game.join_code}</p>
             <p className="text-xs text-muted-foreground">Code</p>
           </div>
           <div className="space-y-1">

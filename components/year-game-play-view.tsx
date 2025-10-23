@@ -119,21 +119,9 @@ export function YearGamePlayView({
         
         if (!isMounted || !gameData) return;
         
-        // If game round changed from 1, redirect to appropriate game
-        if (gameData.current_round !== 1 && gameData.status === "started") {
-          console.log(`🎮 Game round changed to ${gameData.current_round}, redirecting...`);
-          
-          let targetRoute = "";
-          if (gameData.current_round === 2) {
-            targetRoute = "score-steal";
-          } else if (gameData.current_round === 3) {
-            targetRoute = "relay-quiz";
-          }
-          
-          if (targetRoute) {
-            console.log(`🚀 Redirecting to ${targetRoute}...`);
-            window.location.href = `/game/${game.id}/${targetRoute}?participant=${participant.id}`;
-          }
+        // Year Game is the only game mode now
+        if (gameData.current_round !== 1 && gameData.status === "in_progress") {
+          console.log(`⚠️ Game round changed to ${gameData.current_round}, but only Year Game is available`);
         }
       } catch (error) {
         console.error("❌ Failed to check game round:", error);
@@ -536,7 +524,7 @@ export function YearGamePlayView({
 
   if (!session) {
     // 게임 상태에 따른 다른 메시지 표시
-    const isGameStarted = game.status === "started" && game.current_round >= 1;
+    const isGameStarted = game.status === "in_progress" && game.current_round >= 1;
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-100 dark:from-blue-950 dark:via-indigo-950 dark:to-purple-950 p-4 flex items-center justify-center">

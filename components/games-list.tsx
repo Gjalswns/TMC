@@ -93,7 +93,7 @@ export function GamesList({ games: initialGames }: GamesListProps) {
                 {game.title}
               </CardTitle>
               <Badge
-                variant={game.status === "waiting" ? "secondary" : game.status === "started" ? "default" : "outline"}
+                variant={game.status === "waiting" ? "secondary" : game.status === "in_progress" ? "default" : "outline"}
                 className="animate-pulse"
               >
                 {game.status}
@@ -105,7 +105,7 @@ export function GamesList({ games: initialGames }: GamesListProps) {
             <div className="flex items-center gap-4 text-sm text-muted-foreground">
               <div className="flex items-center gap-1">
                 <Hash className="h-4 w-4" />
-                <span className="font-mono">{game.game_code}</span>
+                <span className="font-mono">{game.join_code}</span>
               </div>
               <div className="flex items-center gap-1">
                 <Clock className="h-4 w-4" />

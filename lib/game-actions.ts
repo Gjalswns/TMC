@@ -68,39 +68,19 @@ async function broadcastGameEvent(gameId: string, eventType: string, data: any) 
 import { createYearGameSession } from "./year-game-actions";
 
 async function generateUniqueGameCode(): Promise<string> {
-  const maxAttempts = 90; // Try all possible 2-digit codes if needed
-  const attemptedCodes = new Set<string>();
+  // Use database function to generate unique code
+  const { data, error } = await supabase.rpc('generate_two_digit_code');
   
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // Generate 2-digit code (10-99)
-    const code = String(Math.floor(Math.random() * 90) + 10);
-    
-    // Skip if we already tried this code
-    if (attemptedCodes.has(code)) {
-      continue;
-    }
-    attemptedCodes.add(code);
-    
-    // Check if code already exists in active games
-    const { data, error } = await supabase
-      .from("games")
-      .select("id")
-      .eq("game_code", code)
-      .maybeSingle();
-    
-    if (error) {
-      console.error("Error checking game code:", error);
-      continue;
-    }
-    
-    // If code doesn't exist, use it
-    if (!data) {
-      return code;
-    }
+  if (error) {
+    console.error("Error generating game code:", error);
+    throw new Error("Failed to generate game code. Please try again.");
   }
   
-  // If all 2-digit codes are taken, throw error
-  throw new Error("All game codes are in use. Please delete old games first.");
+  if (!data) {
+    throw new Error("Failed to generate game code. Please try again.");
+  }
+  
+  return data;
 }
 
 export async function createGame(
@@ -157,13 +137,9 @@ export async function createGame(
         grade_class: "Year Game Class", // Default for now
         duration,
         team_count: teamCount,
-        game_code: gameCode,
-        game_type: gameType,
-        total_rounds: totalRounds,
-        max_participants: maxParticipants,
-        join_deadline_minutes: joinDeadlineMinutes,
+        join_code: gameCode,
+        status: "waiting",
         uses_brackets: usesBrackets,
-        game_expires_at: new Date(Date.now() + duration * 60 * 1000).toISOString(), // Game expires after duration
       })
       .select()
       .single();
@@ -253,7 +229,7 @@ export async function joinGame(
     const { data: game, error: gameError } = await supabase
       .from("games")
       .select("id")
-      .eq("game_code", gameCode)
+      .eq("join_code", gameCode)
       .single();
 
     if (gameError || !game) {
@@ -334,11 +310,11 @@ export async function startGame(gameId: string) {
   try {
     console.log("startGame called with gameId:", gameId);
 
-    // Update game status to started and set current round to 1
+    // Update game status to in_progress and set current round to 1
     const { error: gameUpdateError } = await supabase
       .from("games")
       .update({
-        status: "started",
+        status: "in_progress",
         current_round: 1,
         updated_at: new Date().toISOString(),
       })
@@ -443,23 +419,7 @@ export async function nextRound(gameId: string) {
 
     if (updateError) throw updateError;
 
-    // Create appropriate session for the new round
-    if (nextRoundNumber === 2) {
-      // Create Score Steal session for round 2
-      const { createScoreStealSession } = await import("./score-steal-actions");
-      const scoreStealResult = await createScoreStealSession(gameId, nextRoundNumber);
-      if (!scoreStealResult.success) {
-        console.error("Failed to create Score Steal session:", scoreStealResult.error);
-      }
-    } else if (nextRoundNumber === 3 || nextRoundNumber === 4) {
-      // Create Relay Quiz session for rounds 3-4
-      const { createRelayQuizSession } = await import("./relay-quiz-actions");
-      const relayQuizResult = await createRelayQuizSession(gameId, nextRoundNumber);
-      if (!relayQuizResult.success) {
-        console.error("Failed to create Relay Quiz session:", relayQuizResult.error);
-      }
-    }
-
+    // Year Game only - no additional sessions needed
     revalidatePath(`/admin/game/${gameId}`);
     return { success: true, round: nextRoundNumber };
   } catch (error) {
@@ -502,14 +462,11 @@ export async function getGameForJoin(gameCode: string) {
         id,
         title,
         status,
-        game_code,
-        max_participants,
-        join_deadline_minutes,
+        join_code,
         created_at,
-        game_expires_at,
         team_count
       `)
-      .eq("game_code", gameCode)
+      .eq("join_code", gameCode)
       .single();
 
     if (error || !game) {
