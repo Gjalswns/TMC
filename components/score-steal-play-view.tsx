@@ -216,24 +216,23 @@ export function ScoreStealPlayView({
     });
   }, [session?.phase, session?.status, session?.current_question_id, session?.score_steal_questions]);
 
-  // 단순하고 확실한 실시간 업데이트 (매번 전체 로드)
+  // 실시간 업데이트: Socket.IO 우선, 폴링은 백업
   useEffect(() => {
     setSseConnected(true);
     let pollCount = 0;
+    let pollInterval: NodeJS.Timeout | null = null;
 
-    console.log(`🔧 Starting simple polling for session: ${sessionId}`);
+    console.log(`🔧 Starting real-time updates for session: ${sessionId}`);
 
     const poll = async () => {
       pollCount++;
       const timestamp = new Date().toLocaleTimeString();
 
-      console.log(`🔄 [${timestamp}] Poll #${pollCount} - Loading all data...`);
+      console.log(`🔄 [${timestamp}] Poll #${pollCount} - Loading data...`);
 
       try {
-        // 매번 전체 데이터를 새로 로드 (가장 확실한 방법)
         await loadSessionData();
-
-        console.log(`✅ [${timestamp}] Poll #${pollCount} completed successfully`);
+        console.log(`✅ [${timestamp}] Poll #${pollCount} completed`);
       } catch (error) {
         console.error(`❌ [${timestamp}] Poll #${pollCount} failed:`, error);
       }
@@ -242,12 +241,14 @@ export function ScoreStealPlayView({
     // 즉시 한 번 실행
     poll();
 
-    // 2초마다 폴링 (단순하고 확실함)
-    const interval = setInterval(poll, 2000);
+    // 1초마다 폴링 (Socket.IO가 실패할 경우를 대비한 백업)
+    pollInterval = setInterval(poll, 1000);
 
     return () => {
-      console.log(`🔌 Stopping polling for session: ${sessionId}`);
-      clearInterval(interval);
+      console.log(`🔌 Stopping updates for session: ${sessionId}`);
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
     };
   }, [sessionId, loadSessionData]);
 

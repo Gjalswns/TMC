@@ -5,6 +5,7 @@ import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AnimatedBackground } from "@/components/animated-background"
 import { FloatingElements } from "@/components/floating-elements"
+import { SocketProvider } from "@/lib/socket-context"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -23,9 +24,11 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <AnimatedBackground />
-          <FloatingElements />
-          <div className="relative z-10">{children}</div>
+          <SocketProvider>
+            <AnimatedBackground />
+            <FloatingElements />
+            <div className="relative z-10">{children}</div>
+          </SocketProvider>
         </ThemeProvider>
       </body>
     </html>

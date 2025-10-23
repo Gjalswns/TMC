@@ -206,7 +206,7 @@ export function ScoreStealAdmin({
     console.log(`✅ [${timestamp}] [Score Steal Admin] All data loaded`);
   }, [gameId, currentRound]);
 
-  // Initial load and continuous polling
+  // Initial load and continuous polling (faster for admin)
   useEffect(() => {
     let isMounted = true;
     let pollInterval: NodeJS.Timeout | null = null;
@@ -220,8 +220,8 @@ export function ScoreStealAdmin({
     // Initial load
     poll();
 
-    // Poll every 2 seconds for real-time updates
-    pollInterval = setInterval(poll, 2000);
+    // Poll every 1 second for real-time admin updates
+    pollInterval = setInterval(poll, 1000);
 
     return () => {
       isMounted = false;

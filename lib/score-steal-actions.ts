@@ -383,6 +383,9 @@ export async function getScoreStealAttempts(
 
 /**
  * Broadcast question to all teams (중앙 문제 관리 시스템 사용)
+ * 
+ * Socket.IO 서버의 500ms 폴링이 자동으로 변경사항을 감지하여 브로드캐스트합니다.
+ * 데이터베이스 업데이트만 하면 실시간 업데이트가 자동으로 이루어집니다.
  */
 export async function broadcastQuestion(
   sessionId: string,
@@ -456,6 +459,7 @@ export async function broadcastQuestion(
       .single();
 
     console.log(`🔍 [${timestamp}] Verification - Session state AFTER update:`, verifySession);
+    console.log(`⚡ [${timestamp}] Socket.IO polling will broadcast this update within 500ms`);
 
     revalidatePath("/admin");
     revalidatePath("/game");
